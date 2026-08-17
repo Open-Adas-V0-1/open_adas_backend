@@ -12,6 +12,9 @@ docker compose -f docker/docker-compose.yml --env-file .env up -d
 # 3. Install dependencies
 uv sync   # or: pip install -r requirements.txt
 
+# 3b. Apply DB migrations
+alembic upgrade head
+
 # 4. Start the app
 uvicorn app.main:app --reload
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -20,3 +23,4 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 curl http://127.0.0.1:8000/health
 # => {"db":"ok","storage":"ok"}
 ```
+source .venv/bin/activate
