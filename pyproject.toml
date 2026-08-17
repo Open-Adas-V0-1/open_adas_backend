@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "asgiref>=3.8.1",
+    "asyncpg>=0.30.0",
     "bcrypt>=4.3.0",
+    "boto3>=1.35.0",
     "colorama>=0.4.6",
     "ddgs>=9.6.0",
     "duckduckgo-search>=3.9.0",
@@ -30,6 +32,7 @@ dependencies = [
     "python-jose[cryptography]>=3.4.0",
     "python-multipart>=0.0.20",
     "slowapi>=0.1.9",
+    "sqlalchemy[asyncio]>=2.0.36",
     "sqlmodel>=0.0.24",
     "starlette-prometheus>=0.7.0",
     "structlog>=25.2.0",
