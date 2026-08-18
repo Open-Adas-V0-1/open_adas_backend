@@ -88,6 +88,7 @@ class RequirementRepo:
         content: str,
         level: RequirementLevel = RequirementLevel.functional,
         source_published_requirement_id: uuid.UUID | None = None,
+        metadata: dict | None = None,
     ) -> Requirement:
         new_id = uuid.uuid4()
         requirement = Requirement(
@@ -99,6 +100,7 @@ class RequirementRepo:
             version=1,
             root_id=new_id,  # a fresh requirement is the root of its own lineage
             source_published_requirement_id=source_published_requirement_id,
+            metadata_=metadata,
         )
         db.add(requirement)
         await db.flush()
@@ -185,6 +187,7 @@ class DiagramRepo:
         type: DiagramType,
         plantuml: str,
         rendered_path: str | None = None,
+        metadata: dict | None = None,
     ) -> Diagram:
         new_id = uuid.uuid4()
         diagram = Diagram(
@@ -197,6 +200,7 @@ class DiagramRepo:
             status=VersionStatus.pending,
             version=1,
             root_id=new_id,  # a fresh diagram is the root of its own lineage
+            metadata_=metadata,
         )
         db.add(diagram)
         await db.flush()

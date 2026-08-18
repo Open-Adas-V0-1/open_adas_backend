@@ -28,6 +28,10 @@ class SysmlState(TypedDict, total=False):
     feedback: str | None  # reviewer feedback, consumed on regeneration
     review_decision: str | None  # "approve" | "regenerate" | "question"
 
+    # metadata bookkeeping, for the approved-artifact summary written at stockage time
+    last_feedback: str | None  # last feedback that actually produced the approved draft
+    regeneration_count: int
+
     # apply_published_delta
     selected_published_requirement_id: uuid.UUID | str | None
 

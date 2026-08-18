@@ -28,3 +28,20 @@ class IntentDecision(BaseModel):
         default=None,
         description="Clarifying message to show the user when intent is no_action or conversation.",
     )
+
+
+class MiddleDecision(BaseModel):
+    """The middle (layer-2) supervisor's decision: is there a concrete SysML processing
+    request to dispatch to layer-3, or nothing actionable right now?
+    """
+
+    has_request: bool = Field(
+        description="True if the user's message asks for a concrete SysML processing."
+    )
+    resolved_intent: Intent | None = Field(
+        default=None, description="Set only when has_request is True."
+    )
+    message: str | None = Field(
+        default=None,
+        description="Clarifying message to show the user when has_request is False.",
+    )

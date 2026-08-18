@@ -57,6 +57,16 @@ class Settings(BaseSettings):
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
         )
 
+    @property
+    def checkpointer_database_url(self) -> str:
+        """psycopg-style URL (no +asyncpg driver suffix) for AsyncPostgresSaver,
+        which uses psycopg directly rather than SQLAlchemy.
+        """
+        return (
+            f"postgresql://{self.db_user}:{self.db_password}"
+            f"@{self.db_host}:{self.db_port}/{self.db_name}"
+        )
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Enum, ForeignKey, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -115,6 +115,10 @@ class Requirement(Base):
     source_published_requirement_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("published_requirements.id", ondelete="SET NULL"), default=None
     )
+    # Summary of what was APPROVED (not an archive of rejected attempts). Populated by
+    # layer-3's stockage_output on approval: artifact_type, level, source_node,
+    # source_published_id, regeneration_count, final_feedback, summary, approved_at.
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB, default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     session: Mapped["Session"] = relationship(back_populates="requirements")
@@ -144,6 +148,8 @@ class Diagram(Base):
     root_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("diagrams.id", ondelete="SET NULL"), index=True
     )
+    # Same "approved-only summary" contract as Requirement.metadata_.
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB, default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     session: Mapped["Session"] = relationship(back_populates="diagrams")

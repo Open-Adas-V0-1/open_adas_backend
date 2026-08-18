@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 
 from langgraph.graph import END
 from langgraph.types import interrupt
@@ -17,6 +18,18 @@ SOURCE_NODE_MAP = {
     "diagram": "generate_diagram",
     "delta": "apply_published_delta",
 }
+
+
+def _regeneration_tracking(state: SysmlState) -> dict:
+    """Shared by every generator node: bump regeneration_count and remember the
+    feedback that produced THIS draft, only when this call was actually a regenerate
+    (i.e. feedback was present). Feeds the approved-artifact metadata at stockage time.
+    """
+    incoming_feedback = state.get("feedback")
+    return {
+        "last_feedback": incoming_feedback if incoming_feedback else state.get("last_feedback"),
+        "regeneration_count": (state.get("regeneration_count") or 0) + (1 if incoming_feedback else 0),
+    }
 
 
 async def sysml_supervisor(state: SysmlState) -> dict:
@@ -61,6 +74,7 @@ async def generate_requirement(state: SysmlState) -> dict:
         "draft_requirement": response.content,
         "source_node": "requirement",
         "feedback": None,
+        **_regeneration_tracking(state),
     }
 
 
@@ -95,6 +109,7 @@ async def apply_published_delta(state: SysmlState) -> dict:
         "feedback": None,
         # keep provenance across regenerate loops
         "selected_published_requirement_id": str(published.id),
+        **_regeneration_tracking(state),
     }
 
 
@@ -138,6 +153,7 @@ async def generate_diagram(state: SysmlState) -> dict:
         "draft_diagram": response.content,
         "source_node": "diagram",
         "feedback": None,
+        **_regeneration_tracking(state),
     }
 
 
@@ -209,31 +225,66 @@ async def contextual_answer(state: SysmlState) -> dict:
     return {"contextual_answer_text": response.content, "question": None}
 
 
+def _summarize(text: str, limit: int = 200) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
 async def stockage_output(state: SysmlState) -> dict:
     source = state.get("source_node")
+    approved_at = datetime.now(timezone.utc).isoformat()
+    regeneration_count = state.get("regeneration_count") or 0
+    final_feedback = state.get("last_feedback")
 
     async with async_session_factory() as db:
         if source == "diagram":
+            diagram_type_value = state.get("diagram_type") or "use_case"
+            metadata = {
+                "artifact_type": "diagram",
+                "level": state.get("level", "functional"),
+                "source_node": source,
+                "source_published_id": None,
+                "regeneration_count": regeneration_count,
+                "final_feedback": final_feedback,
+                "summary": f"{diagram_type_value} diagram",
+                "approved_at": approved_at,
+            }
             diagram = await DiagramRepo.create(
                 db,
                 session_id=state["session_id"],
                 requirement_id=uuid.UUID(str(state["target_requirement_id"])),
-                type=DiagramType(state.get("diagram_type") or "use_case"),
+                type=DiagramType(diagram_type_value),
                 plantuml=state["draft_diagram"],
+                metadata=metadata,
             )
             await db.commit()
             return {"persisted_diagram_id": str(diagram.id)}
 
         provenance_id = None
+        source_published_id_str = None
         if source == "delta" and state.get("selected_published_requirement_id"):
             provenance_id = uuid.UUID(str(state["selected_published_requirement_id"]))
+            source_published_id_str = str(provenance_id)
+
+        content = state["draft_requirement"]
+        metadata = {
+            "artifact_type": "requirement",
+            "level": state.get("level", "functional"),
+            "source_node": source,
+            "source_published_id": source_published_id_str,
+            "regeneration_count": regeneration_count,
+            "final_feedback": final_feedback,
+            "summary": _summarize(content),
+            "approved_at": approved_at,
+        }
 
         requirement = await RequirementRepo.create(
             db,
             session_id=state["session_id"],
-            content=state["draft_requirement"],
+            content=content,
             level=RequirementLevel(state.get("level", "functional")),
             source_published_requirement_id=provenance_id,
+            metadata=metadata,
         )
         await db.commit()
         return {"persisted_requirement_id": str(requirement.id)}
