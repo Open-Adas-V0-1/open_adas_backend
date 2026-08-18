@@ -7,12 +7,16 @@ from agents.sysml.state import SysmlState
 from app.schemas.sysml import Intent, IntentDecision
 from data.db import async_session_factory
 from data.models import DiagramType, RequirementLevel, VersionStatus
-from data.repository import DiagramRepo, RequirementRepo
+from data.repository import DiagramRepo, PublishedRequirementRepo, RequirementRepo
 from llm.factory import get_llm
 from llm.prompts import load_prompt
 
 # Which generator a "regenerate" decision routes back to, keyed by source_node.
-SOURCE_NODE_MAP = {"requirement": "generate_requirement", "diagram": "generate_diagram"}
+SOURCE_NODE_MAP = {
+    "requirement": "generate_requirement",
+    "diagram": "generate_diagram",
+    "delta": "apply_published_delta",
+}
 
 
 async def sysml_supervisor(state: SysmlState) -> dict:
@@ -35,8 +39,9 @@ def route_from_supervisor(state: SysmlState) -> str:
         return "generate_requirement"
     if intent in (Intent.generate_diagram.value, Intent.modify_diagram.value):
         return "guard_requirement_available"
-    # fail-open: no_action, conversation, apply_published_delta (not built yet) all end
-    # gracefully instead of crashing the graph.
+    if intent == Intent.apply_published_delta.value:
+        return "apply_published_delta"
+    # fail-open: no_action and conversation end gracefully instead of crashing the graph.
     return END
 
 
@@ -56,6 +61,40 @@ async def generate_requirement(state: SysmlState) -> dict:
         "draft_requirement": response.content,
         "source_node": "requirement",
         "feedback": None,
+    }
+
+
+async def apply_published_delta(state: SysmlState) -> dict:
+    published_id = state.get("selected_published_requirement_id")
+    if not published_id:
+        raise ValueError("apply_published_delta requires state['selected_published_requirement_id']")
+
+    async with async_session_factory() as db:
+        published = await PublishedRequirementRepo.get_by_id(
+            db, id=uuid.UUID(str(published_id)), session_id=state["session_id"]
+        )
+    if published is None:
+        raise ValueError(
+            f"Published requirement {published_id} not found in session {state['session_id']}"
+        )
+
+    llm = get_llm("sysml_apply_published_delta")
+    prompt = load_prompt(
+        "sysml/apply_published_delta.md",
+        level=state.get("level", "functional"),
+        published_content=published.content,
+        current_draft=state.get("draft_requirement") or "(none)",
+        feedback=state.get("feedback") or "(none)",
+    )
+
+    response = await llm.ainvoke(prompt)
+
+    return {
+        "draft_requirement": response.content,
+        "source_node": "delta",
+        "feedback": None,
+        # keep provenance across regenerate loops
+        "selected_published_requirement_id": str(published.id),
     }
 
 
@@ -133,8 +172,9 @@ def requirement_review(state: SysmlState) -> dict:
 
     action = decision.get("action") if isinstance(decision, dict) else decision
     feedback = decision.get("feedback") if isinstance(decision, dict) else None
+    question = decision.get("question") if isinstance(decision, dict) else None
 
-    return {"review_decision": action, "feedback": feedback}
+    return {"review_decision": action, "feedback": feedback, "question": question}
 
 
 def route_from_review(state: SysmlState) -> str:
@@ -143,8 +183,30 @@ def route_from_review(state: SysmlState) -> str:
         return "stockage_output"
     if decision == "regenerate":
         return SOURCE_NODE_MAP.get(state.get("source_node"), END)
+    if decision == "question":
+        return "contextual_answer"
     # fail-open: unrecognized/failed decision ends gracefully rather than crashing.
     return END
+
+
+async def contextual_answer(state: SysmlState) -> dict:
+    """Answers a question raised DURING review, using live context. Strictly
+    READ-ONLY: no DB writes, no persistence, no side effects. Routes back to review.
+    """
+    source = state.get("source_node")
+    draft = state.get("draft_diagram") if source == "diagram" else state.get("draft_requirement")
+
+    llm = get_llm("sysml_contextual_answer")
+    prompt = load_prompt(
+        "sysml/contextual_answer.md",
+        level=state.get("level", "functional"),
+        current_draft=draft or "(none)",
+        user_question=state.get("question") or "",
+    )
+
+    response = await llm.ainvoke(prompt)
+
+    return {"contextual_answer_text": response.content, "question": None}
 
 
 async def stockage_output(state: SysmlState) -> dict:
@@ -162,11 +224,16 @@ async def stockage_output(state: SysmlState) -> dict:
             await db.commit()
             return {"persisted_diagram_id": str(diagram.id)}
 
+        provenance_id = None
+        if source == "delta" and state.get("selected_published_requirement_id"):
+            provenance_id = uuid.UUID(str(state["selected_published_requirement_id"]))
+
         requirement = await RequirementRepo.create(
             db,
             session_id=state["session_id"],
             content=state["draft_requirement"],
             level=RequirementLevel(state.get("level", "functional")),
+            source_published_requirement_id=provenance_id,
         )
         await db.commit()
         return {"persisted_requirement_id": str(requirement.id)}

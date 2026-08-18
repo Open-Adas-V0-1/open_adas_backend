@@ -24,9 +24,16 @@ class SysmlState(TypedDict, total=False):
     # generation / review loop
     draft_requirement: str | None
     draft_diagram: str | None  # pending PlantUML text
-    source_node: str | None  # which node produced the current draft: "requirement" | "diagram"
+    source_node: str | None  # which node produced the current draft: "requirement" | "diagram" | "delta"
     feedback: str | None  # reviewer feedback, consumed on regeneration
-    review_decision: str | None  # "approve" | "regenerate"
+    review_decision: str | None  # "approve" | "regenerate" | "question"
+
+    # apply_published_delta
+    selected_published_requirement_id: uuid.UUID | str | None
+
+    # contextual question raised during review (read-only turn, doesn't leave review)
+    question: str | None
+    contextual_answer_text: str | None
 
     # ownership / checkpoint context
     session_id: uuid.UUID

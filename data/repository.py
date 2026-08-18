@@ -87,6 +87,7 @@ class RequirementRepo:
         session_id: uuid.UUID,
         content: str,
         level: RequirementLevel = RequirementLevel.functional,
+        source_published_requirement_id: uuid.UUID | None = None,
     ) -> Requirement:
         new_id = uuid.uuid4()
         requirement = Requirement(
@@ -97,6 +98,7 @@ class RequirementRepo:
             status=VersionStatus.pending,
             version=1,
             root_id=new_id,  # a fresh requirement is the root of its own lineage
+            source_published_requirement_id=source_published_requirement_id,
         )
         db.add(requirement)
         await db.flush()

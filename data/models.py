@@ -110,6 +110,11 @@ class Requirement(Base):
     root_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("requirements.id", ondelete="SET NULL"), index=True
     )
+    # Provenance: which published/library requirement (if any) this one was derived from
+    # via apply_published_delta.
+    source_published_requirement_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("published_requirements.id", ondelete="SET NULL"), default=None
+    )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     session: Mapped["Session"] = relationship(back_populates="requirements")
