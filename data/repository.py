@@ -88,12 +88,15 @@ class RequirementRepo:
         content: str,
         level: RequirementLevel = RequirementLevel.functional,
     ) -> Requirement:
+        new_id = uuid.uuid4()
         requirement = Requirement(
+            id=new_id,
             session_id=session_id,
             content=content,
             level=level,
             status=VersionStatus.pending,
             version=1,
+            root_id=new_id,  # a fresh requirement is the root of its own lineage
         )
         db.add(requirement)
         await db.flush()
@@ -109,14 +112,15 @@ class RequirementRepo:
         return result.scalar_one_or_none()
 
     @staticmethod
-    async def get_active_for_session(db: AsyncSession, session_id: uuid.UUID) -> Requirement | None:
+    async def list_active_for_session(db: AsyncSession, session_id: uuid.UUID) -> list[Requirement]:
+        """All active requirements in the session — one per distinct lineage."""
         result = await db.execute(
             select(Requirement).where(
                 Requirement.session_id == session_id,
                 Requirement.status == VersionStatus.active,
             )
         )
-        return result.scalar_one_or_none()
+        return list(result.scalars().all())
 
     @staticmethod
     async def supersede_and_create_version(
@@ -135,6 +139,7 @@ class RequirementRepo:
             status=VersionStatus.pending,
             version=old.version + 1,
             parent_id=old.id,
+            root_id=old.root_id,  # same lineage as the row it supersedes
         )
         db.add(new)
         await db.flush()
@@ -142,17 +147,21 @@ class RequirementRepo:
 
     @staticmethod
     async def promote(db: AsyncSession, id: uuid.UUID, session_id: uuid.UUID) -> Requirement:
+        target = await RequirementRepo.get_by_id(db, id, session_id)
+        if target is None:
+            raise ValueError(f"Requirement {id} not found in session {session_id}")
+
+        # Supersede only other ACTIVE rows in the SAME lineage (root_id) — distinct
+        # requirements (different lineages) stay active together.
         await db.execute(
             update(Requirement)
             .where(
                 Requirement.session_id == session_id,
+                Requirement.root_id == target.root_id,
                 Requirement.status == VersionStatus.active,
             )
             .values(status=VersionStatus.superseded)
         )
-        target = await RequirementRepo.get_by_id(db, id, session_id)
-        if target is None:
-            raise ValueError(f"Requirement {id} not found in session {session_id}")
         target.status = VersionStatus.active
         await db.flush()
         return target
@@ -175,7 +184,9 @@ class DiagramRepo:
         plantuml: str,
         rendered_path: str | None = None,
     ) -> Diagram:
+        new_id = uuid.uuid4()
         diagram = Diagram(
+            id=new_id,
             session_id=session_id,
             requirement_id=requirement_id,
             type=type,
@@ -183,6 +194,7 @@ class DiagramRepo:
             rendered_path=rendered_path,
             status=VersionStatus.pending,
             version=1,
+            root_id=new_id,  # a fresh diagram is the root of its own lineage
         )
         db.add(diagram)
         await db.flush()
@@ -208,11 +220,13 @@ class DiagramRepo:
         if target is None:
             raise ValueError(f"Diagram {id} not found in session {session_id}")
 
+        # Supersede only other ACTIVE rows in the SAME lineage (root_id) — a requirement
+        # can have several distinct diagram types (or several diagrams) active together.
         await db.execute(
             update(Diagram)
             .where(
                 Diagram.session_id == session_id,
-                Diagram.requirement_id == target.requirement_id,
+                Diagram.root_id == target.root_id,
                 Diagram.status == VersionStatus.active,
             )
             .values(status=VersionStatus.superseded)
@@ -242,6 +256,7 @@ class DiagramRepo:
             status=VersionStatus.pending,
             version=old.version + 1,
             parent_id=old.id,
+            root_id=old.root_id,  # same lineage as the row it supersedes
         )
         db.add(new)
         await db.flush()

@@ -47,9 +47,42 @@ async def main() -> None:
         assert v1_reloaded.status == VersionStatus.superseded
         print(f"v1 remains: status={v1_reloaded.status}")
 
-        active = await RequirementRepo.get_active_for_session(db, session_id=session.id)
-        assert active.id == v2.id
-        print(f"single active requirement for session: id={active.id} (== v2: {active.id == v2.id})")
+        active = await RequirementRepo.list_active_for_session(db, session_id=session.id)
+        assert [r.id for r in active] == [v2.id]
+        print(f"active requirements for session: {[r.id for r in active]} (== [v2]: True)")
+
+        # --- lineage isolation: a second, DISTINCT requirement must be able to be
+        # active at the same time, and promoting/superseding one lineage must never
+        # touch the other's active row. ---
+        other_v1 = await RequirementRepo.create(db, session_id=session.id, content="The system shall other-v1")
+        other_v1 = await RequirementRepo.promote(db, id=other_v1.id, session_id=session.id)
+        assert other_v1.status == VersionStatus.active
+        assert other_v1.root_id == other_v1.id
+        print(f"other_v1 created+promoted (distinct lineage): id={other_v1.id} status={other_v1.status}")
+
+        v2_reloaded = await RequirementRepo.get_by_id(db, id=v2.id, session_id=session.id)
+        assert v2_reloaded.status == VersionStatus.active, "promoting a distinct lineage must not affect v2"
+        print(f"v2 (other lineage) still active: status={v2_reloaded.status}")
+
+        active = await RequirementRepo.list_active_for_session(db, session_id=session.id)
+        active_ids = {r.id for r in active}
+        assert active_ids == {v2.id, other_v1.id}, f"expected both lineages active, got {active_ids}"
+        print(f"both distinct lineages active together: {active_ids}")
+
+        other_v2 = await RequirementRepo.supersede_and_create_version(
+            db, old_id=other_v1.id, new_content="The system shall other-v2", session_id=session.id
+        )
+        assert other_v2.root_id == other_v1.root_id == other_v1.id
+        other_v2 = await RequirementRepo.promote(db, id=other_v2.id, session_id=session.id)
+
+        other_v1_reloaded = await RequirementRepo.get_by_id(db, id=other_v1.id, session_id=session.id)
+        v2_reloaded = await RequirementRepo.get_by_id(db, id=v2.id, session_id=session.id)
+        assert other_v1_reloaded.status == VersionStatus.superseded, "own lineage's v1 must be superseded"
+        assert v2_reloaded.status == VersionStatus.active, "unrelated lineage must be untouched"
+        print(
+            f"other_v2 promoted: own v1 superseded ({other_v1_reloaded.status}), "
+            f"unrelated v2 untouched ({v2_reloaded.status})"
+        )
 
         await db.rollback()  # smoke test data, don't persist
 

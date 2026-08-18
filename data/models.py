@@ -103,10 +103,17 @@ class Requirement(Base):
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("requirements.id", ondelete="SET NULL"), default=None
     )
+    # Identity of the version lineage: a new requirement's root_id is its own id;
+    # a new version's root_id is inherited from its parent. promote() only supersedes
+    # other ACTIVE rows sharing the same root_id, so distinct requirements (different
+    # lineages) can stay active together in the same session.
+    root_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("requirements.id", ondelete="SET NULL"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     session: Mapped["Session"] = relationship(back_populates="requirements")
-    parent: Mapped["Requirement | None"] = relationship(remote_side=[id])
+    parent: Mapped["Requirement | None"] = relationship(remote_side=[id], foreign_keys=[parent_id])
     diagrams: Mapped[list["Diagram"]] = relationship(back_populates="requirement")
 
 
@@ -126,11 +133,17 @@ class Diagram(Base):
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("diagrams.id", ondelete="SET NULL"), default=None
     )
+    # Same lineage-identity scheme as Requirement.root_id — lets promote() supersede
+    # only prior versions of THIS diagram, not other diagram types/lineages on the
+    # same requirement.
+    root_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("diagrams.id", ondelete="SET NULL"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     session: Mapped["Session"] = relationship(back_populates="diagrams")
     requirement: Mapped["Requirement"] = relationship(back_populates="diagrams")
-    parent: Mapped["Diagram | None"] = relationship(remote_side=[id])
+    parent: Mapped["Diagram | None"] = relationship(remote_side=[id], foreign_keys=[parent_id])
 
 
 class PublishedRequirement(Base):

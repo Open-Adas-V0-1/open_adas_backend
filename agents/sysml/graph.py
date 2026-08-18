@@ -1,9 +1,13 @@
 from langgraph.graph import END, START, StateGraph
 
 from agents.sysml.nodes import (
+    generate_diagram,
     generate_requirement,
+    guard_requirement_available,
+    message_no_requirement,
     promote_requirement,
     requirement_review,
+    route_from_guard,
     route_from_review,
     route_from_stockage,
     route_from_supervisor,
@@ -21,6 +25,9 @@ def build_sysml_graph(checkpointer=None):
 
     builder.add_node("sysml_supervisor", sysml_supervisor)
     builder.add_node("generate_requirement", generate_requirement)
+    builder.add_node("guard_requirement_available", guard_requirement_available)
+    builder.add_node("generate_diagram", generate_diagram)
+    builder.add_node("message_no_requirement", message_no_requirement)
     builder.add_node("requirement_review", requirement_review)
     builder.add_node("stockage_output", stockage_output)
     builder.add_node("promote_requirement", promote_requirement)
@@ -30,16 +37,29 @@ def build_sysml_graph(checkpointer=None):
     builder.add_conditional_edges(
         "sysml_supervisor",
         route_from_supervisor,
-        {"generate_requirement": "generate_requirement", END: END},
+        {
+            "generate_requirement": "generate_requirement",
+            "guard_requirement_available": "guard_requirement_available",
+            END: END,
+        },
+    )
+
+    builder.add_conditional_edges(
+        "guard_requirement_available",
+        route_from_guard,
+        {"generate_diagram": "generate_diagram", "message_no_requirement": "message_no_requirement"},
     )
 
     builder.add_edge("generate_requirement", "requirement_review")
+    builder.add_edge("generate_diagram", "requirement_review")
+    builder.add_edge("message_no_requirement", END)
 
     builder.add_conditional_edges(
         "requirement_review",
         route_from_review,
         {
             "generate_requirement": "generate_requirement",
+            "generate_diagram": "generate_diagram",
             "stockage_output": "stockage_output",
             END: END,
         },
