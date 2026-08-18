@@ -9,15 +9,22 @@ class MiddleState(TypedDict, total=False):
 
     # middle supervisor decision
     resolved_intent: str | None
+    diagram_type: str | None
     clarifying_message: str | None
 
-    # the requirement this processing concerns, if any. T5a: passed in directly.
-    # T5b adds real resolution logic (e.g. from "which requirement are we discussing").
-    target_requirement_id: uuid.UUID | None
+    # the requirement this processing concerns, if any. Resolved either directly by
+    # middle_supervisor (named or sole active requirement) or via user_confirm_inputs
+    # when genuinely ambiguous.
+    target_requirement_id: uuid.UUID | str | None
 
     # loop bookkeeping
     processing_counter: int  # how many processings dispatched so far -> drives proc_thread_id
     supervisor_visits: int  # loop guard
+
+    # conditional confirmation (only when genuinely ambiguous)
+    pending_pattern: str | None  # "select_requirement" | "confirm_diagram_type" | "confirm_action"
+    pending_options_source: list[dict] | None  # deterministic, repository-derived options
+    confirm_decision: str | None  # "confirmed" | "modified" | "cancelled"
 
     # layer-3 dispatch
     proc_id: str | None

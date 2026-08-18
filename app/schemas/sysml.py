@@ -41,6 +41,17 @@ class MiddleDecision(BaseModel):
     resolved_intent: Intent | None = Field(
         default=None, description="Set only when has_request is True."
     )
+    diagram_type: DiagramType | None = Field(
+        default=None, description="Only set when resolved_intent concerns a diagram and the type is stated."
+    )
+    named_requirement_id: str | None = Field(
+        default=None,
+        description=(
+            "Set ONLY if the user's message unambiguously refers to one specific requirement "
+            "from the candidate list given in context — copy that candidate's id exactly. "
+            "Leave unset if no candidate is clearly meant."
+        ),
+    )
     message: str | None = Field(
         default=None,
         description="Clarifying message to show the user when has_request is False.",
