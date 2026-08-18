@@ -24,3 +24,13 @@ curl http://127.0.0.1:8000/health
 # => {"db":"ok","storage":"ok"}
 ```
 source .venv/bin/activate
+
+## LLM factory (T3)
+
+Provider, model, key and base URL are all env-driven — set in `.env`:
+`LLM_BACKEND` (gpt|ollama|gemini|claude|capgemini), `LLM_MODEL_ID`, `LLM_API_KEY`,
+`LLM_BASE_URL`. Per-node overrides: `LLM_OVERRIDE_{NODE}_BACKEND` / `_MODEL_ID`.
+
+```bash
+python -m scripts.smoke_test_t3
+```
