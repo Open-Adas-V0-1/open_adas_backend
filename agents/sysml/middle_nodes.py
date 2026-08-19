@@ -14,6 +14,7 @@ from app.schemas.confirmations import (
 from app.schemas.sysml import Intent, MiddleDecision
 from data.db import async_session_factory
 from data.repository import RequirementRepo
+from harness.guards import checkpoint_durability
 from llm.factory import get_llm
 from llm.prompts import load_prompt
 
@@ -238,7 +239,9 @@ async def sysml_processing(state: MiddleState, config: RunnableConfig) -> dict:
     # THIS (middle) graph — exactly the two-level bubbling validated in the spike.
     # Async invoke: required by AsyncPostgresSaver (a sync .invoke() call against an
     # async checkpointer raises InvalidStateError outside the checkpointer's own thread).
-    l3_output = await _sysml_processing_graph.ainvoke(l3_input, child_config)
+    l3_output = await _sysml_processing_graph.ainvoke(
+        l3_input, child_config, durability=checkpoint_durability()
+    )
 
     artifact_type = "diagram" if l3_output.get("active_diagram_id") else "requirement"
     artifact_id = l3_output.get("active_diagram_id") or l3_output.get("active_requirement_id")

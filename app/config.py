@@ -54,6 +54,14 @@ class Settings(BaseSettings):
     sysml_middle_max_visits: int = 10
     sysml_middle_recursion_limit: int = 25
 
+    # ── Top-level supervisor guards (loop protection) ──
+    supervisor_max_visits: int = 10
+    supervisor_recursion_limit: int = 25
+
+    # ── Production checkpointer ──
+    checkpoint_encryption_key: str | None = None
+    checkpoint_durability: str = "async"  # sync | async | exit
+
     @property
     def database_url(self) -> str:
         return (
