@@ -4,6 +4,7 @@ from langgraph.types import interrupt
 
 from agents.sysml.graph import build_sysml_graph
 from agents.sysml.middle_state import MiddleState
+from app.config import get_settings
 from app.schemas.confirmations import (
     ConfirmActionPattern,
     ConfirmDiagramTypePattern,
@@ -15,8 +16,6 @@ from data.db import async_session_factory
 from data.repository import RequirementRepo
 from llm.factory import get_llm
 from llm.prompts import load_prompt
-
-MAX_SUPERVISOR_VISITS = 5
 
 # Intents that concern an EXISTING requirement (as opposed to creating a fresh one) —
 # these are the ones that can be ambiguous when several requirements are active.
@@ -33,10 +32,12 @@ _sysml_processing_graph = build_sysml_graph()
 
 async def middle_supervisor(state: MiddleState) -> dict:
     visits = (state.get("supervisor_visits") or 0) + 1
+    max_visits = get_settings().sysml_middle_max_visits
 
     # Loop guard: an unbounded middle_supervisor <-> sysml_processing loop would be a bug,
-    # not a valid use case. Fail open to END rather than looping forever.
-    if visits > MAX_SUPERVISOR_VISITS:
+    # not a valid use case. Fail open to END rather than looping forever. Env-driven
+    # (SYSML_MIDDLE_MAX_VISITS) rather than hardcoded.
+    if visits > max_visits:
         return {
             "supervisor_visits": visits,
             "resolved_intent": None,
@@ -125,7 +126,7 @@ async def middle_supervisor(state: MiddleState) -> dict:
 
 
 def route_from_middle_supervisor(state: MiddleState) -> str:
-    if (state.get("supervisor_visits") or 0) > MAX_SUPERVISOR_VISITS:
+    if (state.get("supervisor_visits") or 0) > get_settings().sysml_middle_max_visits:
         return END
     if state.get("pending_pattern"):
         return "user_confirm_inputs"

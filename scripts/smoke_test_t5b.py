@@ -20,7 +20,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver  # noqa: E402
 from langgraph.types import Command  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
-from agents.sysml.middle_graph import build_middle_graph  # noqa: E402
+from agents.sysml.middle_graph import build_middle_config, build_middle_graph  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.schemas.sysml import Intent, IntentDecision, MiddleDecision  # noqa: E402
 from data.db import async_session_factory  # noqa: E402
@@ -136,7 +136,7 @@ async def test_unambiguous_direct_route():
              patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm):
 
             middle_graph = build_middle_graph(checkpointer=checkpointer)
-            config = {"configurable": {"thread_id": outer_thread_id}}
+            config = build_middle_config(outer_thread_id)
 
             result_1 = await middle_graph.ainvoke(
                 {"user_input": "give me a state machine diagram", "session_id": session.id}, config
@@ -211,7 +211,7 @@ async def test_ambiguous_select_requirement():
              patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm):
 
             middle_graph = build_middle_graph(checkpointer=checkpointer)
-            config = {"configurable": {"thread_id": outer_thread_id}}
+            config = build_middle_config(outer_thread_id)
 
             result_1 = await middle_graph.ainvoke(
                 {"user_input": "give me a state machine diagram", "session_id": session.id}, config
@@ -288,7 +288,7 @@ async def test_cancel_path():
              patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm):
 
             middle_graph = build_middle_graph(checkpointer=checkpointer)
-            config = {"configurable": {"thread_id": outer_thread_id}}
+            config = build_middle_config(outer_thread_id)
 
             result_1 = await middle_graph.ainvoke(
                 {"user_input": "give me a use case diagram", "session_id": session.id}, config

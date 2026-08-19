@@ -8,6 +8,18 @@ from agents.sysml.middle_nodes import (
     user_confirm_inputs,
 )
 from agents.sysml.middle_state import MiddleState
+from app.config import get_settings
+
+
+def build_middle_config(thread_id: str, **extra_configurable) -> dict:
+    """Build the RunnableConfig callers should use to invoke the middle graph, with
+    the env-driven step-count guard (SYSML_MIDDLE_RECURSION_LIMIT) applied. This is
+    additive to LangGraph's own recursion_limit config key, not a new mechanism.
+    """
+    return {
+        "configurable": {"thread_id": thread_id, **extra_configurable},
+        "recursion_limit": get_settings().sysml_middle_recursion_limit,
+    }
 
 
 def build_middle_graph(checkpointer=None):

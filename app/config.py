@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = False
 
+    # ── SysML middle-layer guards (loop protection) ──
+    sysml_middle_max_visits: int = 10
+    sysml_middle_recursion_limit: int = 25
+
     @property
     def database_url(self) -> str:
         return (

@@ -21,7 +21,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
 from sqlalchemy import text
 
-from agents.sysml.middle_graph import build_middle_graph
+from agents.sysml.middle_graph import build_middle_config, build_middle_graph
 from app.config import get_settings
 from app.schemas.sysml import Intent, IntentDecision, MiddleDecision
 from data.db import async_session_factory
@@ -129,7 +129,7 @@ async def main() -> None:
              patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm):
 
             middle_graph = build_middle_graph(checkpointer=checkpointer)
-            config = {"configurable": {"thread_id": outer_thread_id}}
+            config = build_middle_config(outer_thread_id)
 
             print("=== RUN 1 (expect two-level nested pause, bubbling L3 -> middle -> caller) ===")
             result_1 = await middle_graph.ainvoke(
