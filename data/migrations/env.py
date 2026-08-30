@@ -17,6 +17,18 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# The langgraph AsyncPostgresSaver checkpointer creates its own tables (via its own
+# .setup(), not our SQLAlchemy models) in the SAME database. Exclude them from
+# autogenerate comparison so `alembic check`/`revision --autogenerate` never propose
+# dropping tables we don't own and didn't create.
+_CHECKPOINTER_TABLES = {"checkpoints", "checkpoint_blobs", "checkpoint_writes", "checkpoint_migrations"}
+
+
+def _include_object(object, name, type_, reflected, compare_to):
+    if type_ == "table" and name in _CHECKPOINTER_TABLES:
+        return False
+    return True
+
 
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
@@ -25,6 +37,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_object=_include_object,
     )
 
     with context.begin_transaction():
@@ -32,7 +45,7 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(connection=connection, target_metadata=target_metadata, include_object=_include_object)
 
     with context.begin_transaction():
         context.run_migrations()

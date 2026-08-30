@@ -93,7 +93,21 @@ async def main() -> None:
     settings = get_settings()
     user, session = await setup_user_project_session()
 
-    draft = "The system shall stop within 50 meters."
+    draft = (
+        "package BrakingSystem {\n"
+        "    part def Vehicle {\n"
+        "        attribute stoppingDistance : ISQ::LengthValue;\n"
+        "    }\n"
+        "    part vehicle : Vehicle {\n"
+        "        attribute :>> stoppingDistance = 45 [SI::m];\n"
+        "    }\n"
+        "    requirement def StoppingDistanceRequirement {\n"
+        "        doc /* The vehicle shall stop within 50 meters when braking. */\n"
+        "        subject veh : Vehicle;\n"
+        "        require constraint { veh.stoppingDistance <= 50 [SI::m] }\n"
+        "    }\n"
+        "}\n"
+    )
 
     # middle_supervisor is consulted twice: once to dispatch, once after the processing
     # loops back — the second time it must say "nothing more to do" or the loop guard
@@ -105,6 +119,7 @@ async def main() -> None:
         ]
     )
     layer3_supervisor_llm = FakeStructuredWrapperLLM(IntentDecision(intent=Intent.generate_requirement))
+    plan_llm = FakeSequenceLLM(["Requirement def with subject Vehicle and a stopping-distance constraint."])
     generate_llm = FakeSequenceLLM([draft])
 
     def fake_middle_get_llm(node_name=None):
@@ -115,7 +130,9 @@ async def main() -> None:
     def fake_layer3_get_llm(node_name=None):
         if node_name == "sysml_supervisor":
             return layer3_supervisor_llm
-        if node_name == "sysml_generate_requirement":
+        if node_name == "sysml_plan":
+            return plan_llm
+        if node_name == "sysml_generate":
             return generate_llm
         raise AssertionError(f"unexpected node_name in layer-3 nodes: {node_name}")
 
@@ -125,8 +142,17 @@ async def main() -> None:
     async with AsyncPostgresSaver.from_conn_string(settings.checkpointer_database_url) as checkpointer:
         await checkpointer.setup()
 
+        # verify_node's tool calls (agents.sysml.tools.validate/to_mermaid) spawn asyncio
+        # subprocesses, which need ProactorEventLoop on Windows — but AsyncPostgresSaver's
+        # psycopg needs SelectorEventLoop on Windows (see the policy set above). The two
+        # are mutually exclusive in one process on Windows (not an issue on the Linux/
+        # Docker target, where this split doesn't exist). This test's job is nesting/
+        # thread-isolation/persistence, not the tool integration itself — that's covered
+        # by scripts/smoke_test_layer3_rebuild.py against the real tool — so we stub the
+        # tool call here rather than fight that platform conflict.
         with patch("agents.sysml.middle_nodes.get_llm", side_effect=fake_middle_get_llm), \
-             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm):
+             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm), \
+             patch("agents.sysml.nodes.validate", return_value=[]):
 
             middle_graph = build_middle_graph(checkpointer=checkpointer)
             config = build_middle_config(outer_thread_id)

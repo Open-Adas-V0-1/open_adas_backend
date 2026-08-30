@@ -133,7 +133,10 @@ class Diagram(Base):
     session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"))
     requirement_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("requirements.id", ondelete="CASCADE"))
     type: Mapped[DiagramType] = mapped_column(Enum(DiagramType, name="diagram_type"))
-    plantuml: Mapped[str] = mapped_column(Text)
+    # The generated SysML v2 textual notation for this diagram's model elements — never
+    # authored directly. The Mermaid diagram below is DERIVED from this via the tool.
+    sysml_text: Mapped[str] = mapped_column(Text)
+    mermaid: Mapped[str | None] = mapped_column(Text, default=None)
     rendered_path: Mapped[str | None] = mapped_column(Text, default=None)
     status: Mapped[VersionStatus] = mapped_column(
         Enum(VersionStatus, name="version_status"), default=VersionStatus.pending

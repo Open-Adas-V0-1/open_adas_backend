@@ -15,6 +15,11 @@ from unittest.mock import patch
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+# NOTE: this policy is required for AsyncPostgresSaver/psycopg on Windows, but is
+# incompatible with asyncio subprocesses (needed by Layer 3's real SysML v2 tooling).
+# This test's job is ambiguity routing/confirm patterns, not the tool integration
+# (covered for real by scripts/smoke_test_layer3_rebuild.py), so verify_node's tool
+# call is stubbed below rather than fighting that Windows-only conflict.
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver  # noqa: E402
 from langgraph.types import Command  # noqa: E402
@@ -26,6 +31,16 @@ from app.schemas.sysml import Intent, IntentDecision, MiddleDecision  # noqa: E4
 from data.db import async_session_factory  # noqa: E402
 from data.models import DiagramType, VersionStatus  # noqa: E402
 from data.repository import DiagramRepo, ProjectRepo, RequirementRepo, SessionRepo, UserRepo  # noqa: E402
+
+VALID_DIAGRAM_MODEL = (
+    "package BrakeStates {\n"
+    "    part def BrakingController {\n"
+    "        state def Idle;\n"
+    "        state def Braking;\n"
+    "    }\n"
+    "    part controller : BrakingController;\n"
+    "}\n"
+)
 
 
 class FakeMessage:
@@ -103,15 +118,14 @@ async def test_unambiguous_direct_route():
         await db.commit()
         requirement_id = req.id
 
-    draft_diagram = "@startuml\nstate Braking\n[*] --> Braking\n@enduml"
-
     middle_llm = FakeStructuredWrapperLLM(
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_diagram, diagram_type=DiagramType.state_machine)
     )
     layer3_supervisor_llm = FakeStructuredWrapperLLM(
         IntentDecision(intent=Intent.generate_diagram, diagram_type=DiagramType.state_machine)
     )
-    diagram_llm = FakeSequenceLLM([draft_diagram])
+    plan_llm = FakeSequenceLLM(["State machine with Idle and Braking states."])
+    diagram_llm = FakeSequenceLLM([VALID_DIAGRAM_MODEL])
 
     def fake_middle_get_llm(node_name=None):
         if node_name == "sysml_middle_supervisor":
@@ -123,7 +137,9 @@ async def test_unambiguous_direct_route():
     def fake_layer3_get_llm(node_name=None):
         if node_name == "sysml_supervisor":
             return layer3_supervisor_llm
-        if node_name == "sysml_generate_diagram":
+        if node_name == "sysml_plan":
+            return plan_llm
+        if node_name == "sysml_generate":
             return diagram_llm
         raise AssertionError(f"unexpected node_name in layer-3 nodes: {node_name}")
 
@@ -133,7 +149,8 @@ async def test_unambiguous_direct_route():
     async with AsyncPostgresSaver.from_conn_string(settings.checkpointer_database_url) as checkpointer:
         await checkpointer.setup()
         with patch("agents.sysml.middle_nodes.get_llm", side_effect=fake_middle_get_llm), \
-             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm):
+             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm), \
+             patch("agents.sysml.nodes.validate", return_value=[]):
 
             middle_graph = build_middle_graph(checkpointer=checkpointer)
             config = build_middle_config(outer_thread_id)
@@ -176,8 +193,6 @@ async def test_ambiguous_select_requirement():
         req_b = await RequirementRepo.promote(db, id=req_b.id, session_id=session.id)
         await db.commit()
 
-    draft_diagram = "@startuml\nstate Fault\n[*] --> Fault\n@enduml"
-
     # named_requirement_id left unset -> genuinely ambiguous with 2 active requirements
     middle_llm = FakeStructuredWrapperLLM(
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_diagram, diagram_type=DiagramType.state_machine)
@@ -186,7 +201,8 @@ async def test_ambiguous_select_requirement():
     layer3_supervisor_llm = FakeStructuredWrapperLLM(
         IntentDecision(intent=Intent.generate_diagram, diagram_type=DiagramType.state_machine)
     )
-    diagram_llm = FakeSequenceLLM([draft_diagram])
+    plan_llm = FakeSequenceLLM(["State machine with Idle and Braking states."])
+    diagram_llm = FakeSequenceLLM([VALID_DIAGRAM_MODEL])
 
     def fake_middle_get_llm(node_name=None):
         if node_name == "sysml_middle_supervisor":
@@ -198,7 +214,9 @@ async def test_ambiguous_select_requirement():
     def fake_layer3_get_llm(node_name=None):
         if node_name == "sysml_supervisor":
             return layer3_supervisor_llm
-        if node_name == "sysml_generate_diagram":
+        if node_name == "sysml_plan":
+            return plan_llm
+        if node_name == "sysml_generate":
             return diagram_llm
         raise AssertionError(f"unexpected node_name in layer-3 nodes: {node_name}")
 
@@ -208,7 +226,8 @@ async def test_ambiguous_select_requirement():
     async with AsyncPostgresSaver.from_conn_string(settings.checkpointer_database_url) as checkpointer:
         await checkpointer.setup()
         with patch("agents.sysml.middle_nodes.get_llm", side_effect=fake_middle_get_llm), \
-             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm):
+             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm), \
+             patch("agents.sysml.nodes.validate", return_value=[]):
 
             middle_graph = build_middle_graph(checkpointer=checkpointer)
             config = build_middle_config(outer_thread_id)

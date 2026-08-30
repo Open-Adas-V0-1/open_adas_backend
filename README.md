@@ -34,3 +34,22 @@ Provider, model, key and base URL are all env-driven — set in `.env`:
 ```bash
 python -m scripts.smoke_test_t3
 ```
+
+## SysML v2 tooling (Layer 3)
+
+The SysML single-processing graph verifies generated SysML v2 text against the free
+`daltskin/sysml-v2-lsp` language server (validation) and MCP server (Mermaid diagram
+derivation). One-time setup:
+
+```bash
+cd tools/sysml_v2
+npm install
+```
+
+Server paths default to `tools/sysml_v2/node_modules/sysml-v2-lsp/dist/server/{server,mcpServer}.js`;
+override via `SYSML_LSP_SERVER_PATH` / `SYSML_MCP_SERVER_PATH` if installed elsewhere
+(e.g. a different path in Docker).
+
+```bash
+python -m scripts.smoke_test_layer3_rebuild
+```

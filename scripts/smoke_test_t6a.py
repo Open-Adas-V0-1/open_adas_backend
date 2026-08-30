@@ -29,6 +29,31 @@ from data.repository import DiagramRepo, ProjectRepo, RequirementRepo, SessionRe
 from harness.checkpointer import build_production_checkpointer  # noqa: E402
 from supervisor.graph import build_supervisor_config, build_supervisor_graph  # noqa: E402
 
+VALID_REQUIREMENT = (
+    "package BrakingSystem {\n"
+    "    part def Vehicle {\n"
+    "        attribute stoppingDistance : ISQ::LengthValue;\n"
+    "    }\n"
+    "    part vehicle : Vehicle {\n"
+    "        attribute :>> stoppingDistance = 45 [SI::m];\n"
+    "    }\n"
+    "    requirement def StoppingDistanceRequirement {\n"
+    "        doc /* The vehicle shall stop within 50 meters when braking. */\n"
+    "        subject veh : Vehicle;\n"
+    "        require constraint { veh.stoppingDistance <= 50 [SI::m] }\n"
+    "    }\n"
+    "}\n"
+)
+VALID_DIAGRAM_MODEL = (
+    "package BrakeStates {\n"
+    "    part def BrakingController {\n"
+    "        state def Idle;\n"
+    "        state def Braking;\n"
+    "    }\n"
+    "    part controller : BrakingController;\n"
+    "}\n"
+)
+
 
 class FakeMessage:
     def __init__(self, content):
@@ -107,7 +132,7 @@ async def test_full_nesting_unambiguous():
     print("=" * 70)
     user, session = await setup_user_project_session()
 
-    draft = "The system shall stop within 50 meters."
+    draft = VALID_REQUIREMENT
 
     top_llm = FakeStructuredWrapperLLM(
         [
@@ -122,6 +147,7 @@ async def test_full_nesting_unambiguous():
         ]
     )
     layer3_supervisor_llm = FakeStructuredWrapperLLM(IntentDecision(intent=Intent.generate_requirement))
+    plan_llm = FakeSequenceLLM(["Requirement def with subject Vehicle and a stopping-distance constraint."])
     generate_llm = FakeSequenceLLM([draft])
 
     def fake_top_get_llm(node_name=None):
@@ -137,7 +163,9 @@ async def test_full_nesting_unambiguous():
     def fake_layer3_get_llm(node_name=None):
         if node_name == "sysml_supervisor":
             return layer3_supervisor_llm
-        if node_name == "sysml_generate_requirement":
+        if node_name == "sysml_plan":
+            return plan_llm
+        if node_name == "sysml_generate":
             return generate_llm
         raise AssertionError(f"unexpected node_name in layer-3 nodes: {node_name}")
 
@@ -146,7 +174,8 @@ async def test_full_nesting_unambiguous():
     async with build_production_checkpointer() as checkpointer:
         with patch("supervisor.router.get_llm", side_effect=fake_top_get_llm), \
              patch("agents.sysml.middle_nodes.get_llm", side_effect=fake_middle_get_llm), \
-             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm):
+             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm), \
+             patch("agents.sysml.nodes.validate", return_value=[]):
 
             top_graph = build_supervisor_graph(checkpointer=checkpointer)
             config = build_supervisor_config(outer_thread_id)
@@ -221,8 +250,6 @@ async def test_ambiguous_bubbles_through_top():
         req_b = await RequirementRepo.promote(db, id=req_b.id, session_id=session.id)
         await db.commit()
 
-    draft_diagram = "@startuml\nstate Fault\n[*] --> Fault\n@enduml"
-
     top_llm = FakeStructuredWrapperLLM(
         [
             TopDecision(active_agent=AgentTarget.sysml, intent_complete=False),
@@ -239,7 +266,8 @@ async def test_ambiguous_bubbles_through_top():
     layer3_supervisor_llm = FakeStructuredWrapperLLM(
         IntentDecision(intent=Intent.generate_diagram, diagram_type=DiagramType.state_machine)
     )
-    diagram_llm = FakeSequenceLLM([draft_diagram])
+    plan_llm = FakeSequenceLLM(["State machine with Idle and Braking states."])
+    diagram_llm = FakeSequenceLLM([VALID_DIAGRAM_MODEL])
 
     def fake_top_get_llm(node_name=None):
         if node_name == "top_level_supervisor":
@@ -256,7 +284,9 @@ async def test_ambiguous_bubbles_through_top():
     def fake_layer3_get_llm(node_name=None):
         if node_name == "sysml_supervisor":
             return layer3_supervisor_llm
-        if node_name == "sysml_generate_diagram":
+        if node_name == "sysml_plan":
+            return plan_llm
+        if node_name == "sysml_generate":
             return diagram_llm
         raise AssertionError(f"unexpected node_name in layer-3 nodes: {node_name}")
 
@@ -265,7 +295,8 @@ async def test_ambiguous_bubbles_through_top():
     async with build_production_checkpointer() as checkpointer:
         with patch("supervisor.router.get_llm", side_effect=fake_top_get_llm), \
              patch("agents.sysml.middle_nodes.get_llm", side_effect=fake_middle_get_llm), \
-             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm):
+             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm), \
+             patch("agents.sysml.nodes.validate", return_value=[]):
 
             top_graph = build_supervisor_graph(checkpointer=checkpointer)
             config = build_supervisor_config(outer_thread_id)
@@ -314,11 +345,15 @@ async def test_encryption_at_rest():
     print("=" * 70)
     user, session = await setup_user_project_session()
 
-    draft = "The system shall have a unique plaintext marker XYZZY123 in it."
+    draft = VALID_REQUIREMENT.replace(
+        "The vehicle shall stop within 50 meters when braking.",
+        "The vehicle shall have a unique plaintext marker XYZZY123 in it.",
+    )
 
     top_llm = FakeStructuredWrapperLLM(TopDecision(active_agent=AgentTarget.sysml, intent_complete=False))
     middle_llm = FakeStructuredWrapperLLM(MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement))
     layer3_supervisor_llm = FakeStructuredWrapperLLM(IntentDecision(intent=Intent.generate_requirement))
+    plan_llm = FakeSequenceLLM(["Requirement def with subject Vehicle and a marker constraint."])
     generate_llm = FakeSequenceLLM([draft])
 
     def fake_top_get_llm(node_name=None):
@@ -330,6 +365,8 @@ async def test_encryption_at_rest():
     def fake_layer3_get_llm(node_name=None):
         if node_name == "sysml_supervisor":
             return layer3_supervisor_llm
+        if node_name == "sysml_plan":
+            return plan_llm
         return generate_llm
 
     outer_thread_id = f"outer-{uuid.uuid4()}"
@@ -337,7 +374,8 @@ async def test_encryption_at_rest():
     async with build_production_checkpointer() as checkpointer:
         with patch("supervisor.router.get_llm", side_effect=fake_top_get_llm), \
              patch("agents.sysml.middle_nodes.get_llm", side_effect=fake_middle_get_llm), \
-             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm):
+             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm), \
+             patch("agents.sysml.nodes.validate", return_value=[]):
 
             top_graph = build_supervisor_graph(checkpointer=checkpointer)
             config = build_supervisor_config(outer_thread_id)
