@@ -22,7 +22,9 @@ requirement definition or the model elements behind a diagram — before writing
    - physical: interfaces, materials, physical constraints.
 4. If a source text is given (deriving from a higher level already recorded in this
    thread), plan how the new artifact relates to it — do not ignore it.
-5. Do NOT write actual SysML v2 syntax here — this is the plan, not the artifact.
+5. Consult the skill guidance below (selectively loaded for this exact task) for the
+   correct SysML v2 constructs and known-good patterns — prefer it over guessing.
+6. Do NOT write actual SysML v2 syntax here — this is the plan, not the artifact.
 
 # Standards
 - Keep the plan short and concrete — a structural outline, not prose explanation.
@@ -38,3 +40,6 @@ A short structural plan (plain text) that `generate_node` will turn into SysML v
 - Diagram type (if applicable): {{diagram_type}}
 - User request: {{user_input}}
 - Source text (if deriving from a higher level): {{source_text}}
+
+## Skill guidance (selectively loaded, section-level, for this exact task)
+{{skill_guidance}}

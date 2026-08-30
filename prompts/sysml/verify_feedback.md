@@ -12,7 +12,10 @@ nothing more, nothing invented.
    draft didn't produce).
 3. If human feedback is present, state it as-is — it takes priority over automatic
    findings when they conflict.
-4. Do not add fixes or guesses of your own — this is a report, not a rewrite.
+4. If a documented fix section is present below (selectively retrieved from the skill's
+   ERRORS.md for these exact diagnostics), surface it — apply THAT fix rather than
+   guessing a new one.
+5. Do not add fixes or guesses of your own — this is a report, not a rewrite.
 
 # Standards
 - Be exhaustive: every diagnostic and gap must be listed, not summarized away.
@@ -29,3 +32,6 @@ A plain-text block the generation prompt can drop straight into its context.
 
 ## Human feedback (if any)
 {{human_feedback}}
+
+## Documented fix (selectively retrieved from the skill's ERRORS.md, if a match was found)
+{{skill_error_help}}

@@ -13,6 +13,7 @@ from data.models import DiagramType, RequirementLevel
 from data.repository import DiagramRepo, RequirementRepo
 from llm.factory import get_llm
 from llm.prompts import load_prompt
+from skills.loader import get_error_help, get_patterns, get_syntax, match
 
 _GENERATE_TARGETING_INTENTS = {
     Intent.generate_requirement.value,
@@ -57,6 +58,46 @@ def _format_diagnostics(diagnostics: list[dict]) -> str:
         f"- [{d.get('severity')}] line {d.get('line')}, col {d.get('column')}: {d.get('message')}"
         for d in diagnostics
     )
+
+
+def _skill_match_query(state: SysmlState) -> str:
+    """Query used at Level 2 (match against name+description) to find which
+    procedural-memory skill(s) are relevant to this generation task.
+    """
+    source_node = state.get("source_node") or "requirement"
+    level = state.get("level", "functional")
+    diagram_type = (state.get("diagram_type") or "").replace("_", " ")
+    parts = ["SysML v2 systems modeling", level, source_node, diagram_type, state.get("user_input", "")]
+    return " ".join(p for p in parts if p)
+
+
+def _skill_reference_query(state: SysmlState) -> str:
+    """Query used at Level 3 (section-level retrieval) — narrower than the Level 2
+    match query, aimed at the specific construct being generated.
+    """
+    source_node = state.get("source_node") or "requirement"
+    if source_node == "diagram":
+        diagram_type = (state.get("diagram_type") or "part").replace("_", " ")
+        return f"{diagram_type} definition"
+    return "requirement subject constraint"
+
+
+def _skill_guidance(state: SysmlState) -> str:
+    """Progressive disclosure in action: Level 2 match() picks the relevant skill(s),
+    then Level 3 get_syntax()/get_patterns() pull ONLY the section(s) relevant to what
+    is being generated right now — never a whole reference file.
+    """
+    matched = match(_skill_match_query(state), max_skills=2)
+    if not matched:
+        return ""
+
+    ref_query = _skill_reference_query(state)
+    blocks: list[str] = []
+    for skill in matched:
+        syntax = get_syntax(ref_query, skill_name=skill.meta.name)
+        patterns = get_patterns(ref_query, skill_name=skill.meta.name)
+        blocks.extend(b for b in (syntax, patterns) if b)
+    return "\n\n".join(blocks)
 
 
 async def sysml_supervisor(state: SysmlState) -> dict:
@@ -109,6 +150,10 @@ async def plan_node(state: SysmlState) -> dict:
             "the middle layer is responsible for resolving it before dispatching here."
         )
 
+    # plan_node runs before generate_node's source_node/diagram_type would normally be
+    # set for _skill_guidance's lookup, so build the query from what we already know.
+    skill_guidance = _skill_guidance({**state, "source_node": source_node})
+
     llm = get_llm("sysml_plan")
     prompt = load_prompt(
         "sysml/plan.md",
@@ -117,6 +162,7 @@ async def plan_node(state: SysmlState) -> dict:
         diagram_type=state.get("diagram_type") or "n/a",
         user_input=state.get("user_input", ""),
         source_text=source_text or "(none)",
+        skill_guidance=skill_guidance or "(no matching skill guidance found)",
     )
     response = await llm.ainvoke(prompt)
 
@@ -140,12 +186,19 @@ async def generate_node(state: SysmlState) -> dict:
 
     verify_feedback_text = "(none)"
     if diagnostics or coverage_gaps or feedback:
+        # Skill-sourced fix guidance for exactly the diagnostics we got back — this is
+        # what should shorten the verify loop: regeneration applies the documented fix
+        # instead of guessing again.
+        skill_error_help = get_error_help(diagnostics) if diagnostics else ""
         verify_feedback_text = load_prompt(
             "sysml/verify_feedback.md",
             diagnostics=_format_diagnostics(diagnostics),
             coverage_gaps="\n".join(f"- {g}" for g in coverage_gaps) or "(none)",
             human_feedback=feedback or "(none)",
+            skill_error_help=skill_error_help or "(no matching documented fix found)",
         )
+
+    skill_guidance = _skill_guidance(state)
 
     llm = get_llm("sysml_generate")
     prompt = load_prompt(
@@ -157,6 +210,7 @@ async def generate_node(state: SysmlState) -> dict:
         source_text=state.get("source_requirement_content") or "(none)",
         previous_draft=state.get("draft_sysml") or "(none)",
         verify_feedback=verify_feedback_text,
+        skill_guidance=skill_guidance or "(no matching skill guidance found)",
     )
     response = await llm.ainvoke(prompt)
 

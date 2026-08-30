@@ -20,6 +20,8 @@ physical design.
    describes — do not rewrite unrelated parts of the draft.
 5. Use SI units on every physical-quantity attribute (`[SI::m]`, `[SI::kg]`, `[SI::s]`,
    etc.) — never a bare number.
+6. Prefer the skill guidance below (selectively loaded for this exact construct) over
+   the few-shot examples when they conflict — it's the authoritative, up-to-date source.
 
 # Standards
 - Output ONLY valid SysML v2 textual notation — no explanation, no markdown fences.
@@ -74,3 +76,6 @@ Valid SysML v2 textual notation implementing the plan, ready for automatic verif
 - Source text (if deriving from a higher level): {{source_text}}
 - Previous draft: {{previous_draft}}
 - Verify feedback (fix exactly this, if present): {{verify_feedback}}
+
+## Skill guidance (selectively loaded, section-level, for this exact task)
+{{skill_guidance}}
