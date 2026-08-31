@@ -1,12 +1,21 @@
-"""Standalone test for T6a: full 3-level nesting (top -> middle -> processing) under the
-PRODUCTION AsyncPostgresSaver (encrypted, durability-configured), plus the top-level guard.
+"""SUPERSEDED (as of the Layer-1 rebuild, Step 1) -- kept for reference only, currently
+FAILING and not run as part of any regression sweep.
 
-LLM call sites are stubbed (same rationale as T4/T5: local Ollama models don't reliably
-support LangChain structured-output tool-calling in this environment). Everything else —
-graph wiring, THREE-level nested interrupt/resume bubbling, deterministic per-dispatch
-thread ids, encryption at rest, and persistence via the T2 repository — runs for real.
+This tested T6a's ORIGINAL top-level supervisor: a planner that always dispatched
+(stubbing TopDecision/AgentTarget) and drove full 3-level nesting (top -> middle ->
+processing) on every turn. The Layer-1 rebuild replaces that with top_level_supervisor
+as a HUB that classifies each turn first (simple_response / needs_execution / unclear)
+and only in Step 1 -- there is no dispatch wiring (sysml_middle_node) in the graph yet,
+so this file's scenarios cannot pass until Step 2 rebuilds the needs_execution ->
+planning/delegation path. scripts/smoke_test_supervisor_hub.py covers Step 1's actual
+behavior; scripts/smoke_test_layer2_integration.py covers Layer-2/Layer-3 nesting and
+encryption-at-rest independent of Layer 1. Once Step 2 restores dispatch, this file's
+scenarios should be re-created (with HubDecision-based stubs) rather than resurrected
+as-is.
 
-Run: python -m scripts.smoke_test_t6a
+Original docstring, for context: full 3-level nesting (top -> middle -> processing)
+under the PRODUCTION AsyncPostgresSaver (encrypted, durability-configured), plus the
+top-level guard.
 """
 import asyncio
 import os
