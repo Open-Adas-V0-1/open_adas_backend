@@ -9,22 +9,23 @@ class SupervisorState(TypedDict, total=False):
 
     # hub classification (Layer-1 rebuild, Step 1): the FIRST-pass routing decision
     # made every turn by top_level_supervisor. "response" is the direct answer for
-    # simple_response, the clarifying question for unclear, or the placeholder for
-    # needs_execution (until Steps 2-3 build real dispatch).
+    # simple_response, or the clarifying question for unclear. Left None while
+    # needs_execution is being planned/executed (Steps 2-3).
     classification: str | None  # "simple_response" | "needs_execution" | "unclear"
     response: str | None
 
-    # planner state -- a placeholder shape here (unused in Step 1); Step 2's
-    # conditional planning path fills this in when classification == needs_execution.
-    # Kept forward-compatible so later steps extend it rather than reshaping it.
+    # the TODO-list plan (Step 2): a PlanState.model_dump() -- {tasks: [...], "
+    # original_request": str}, built by plan_node ONLY for needs_execution. None until
+    # a plan is built; None again once a fresh turn starts. Step 3's execution loop
+    # consumes this to drive delegation; Step 4 adds conditional plan_review over it.
     plan_state: dict | None
 
     # LIGHT references from delegated tasks -- never full artifact content. A
-    # placeholder list here (unused in Step 1); Step 3's delegation path appends to it.
+    # placeholder list here (unused until Step 3); Step 3's delegation path appends to it.
     results: list[dict] | None
 
     # dispatched-to-SysML context (forwarded to the middle layer as-is once dispatch is
-    # rebuilt in Step 2; unused in Step 1)
+    # rebuilt in Step 3; unused in Steps 1-2)
     target_requirement_id: uuid.UUID | str | None
 
     # loop bookkeeping

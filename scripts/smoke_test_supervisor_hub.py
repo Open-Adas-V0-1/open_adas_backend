@@ -127,23 +127,44 @@ async def test_simple_response():
 # work, NOT answered as small talk. Only a placeholder response for now (Steps 2-3
 # build real dispatch).
 # ---------------------------------------------------------------------------
-async def test_needs_execution_placeholder():
-    print("\n--- Scenario 2: needs_execution -- classified as work, placeholder response ---")
+async def test_needs_execution_routes_onward():
+    print("\n--- Scenario 2: needs_execution -- classified as work, NOT answered as small talk ---")
+    # As of the Layer-1 rebuild Step 2, needs_execution routes to plan_node instead of
+    # returning a Step-1 placeholder -- plan_node's own coverage lives in
+    # scripts/smoke_test_supervisor_plan.py. This scenario stays focused on Step 1's
+    # actual contract: the hub classification itself, proven by asserting it is
+    # correctly identified as work (not small talk) BEFORE anything downstream runs.
     user, session = await setup_user_project_session("exec")
+
+    from app.schemas.supervisor import PlanDecision, PlannedTask
+    from data.models import RequirementLevel
 
     top_llm = FakeStructuredWrapperLLM(
         HubDecision(classification=HubClassification.needs_execution, response=None)
+    )
+    plan_llm = FakeStructuredWrapperLLM(
+        PlanDecision(
+            sufficient=True,
+            tasks=[PlannedTask(description="Generate an operational requirement for braking.",
+                                intent="generate_requirement", level=RequirementLevel.operational)],
+        )
     )
 
     def fake_top_get_llm(node_name=None):
         if node_name == "top_level_supervisor":
             return top_llm
-        raise AssertionError(f"unexpected node_name: {node_name}")
+        raise AssertionError(f"unexpected node_name in supervisor.router: {node_name}")
+
+    def fake_plan_get_llm(node_name=None):
+        if node_name == "plan_node":
+            return plan_llm
+        raise AssertionError(f"unexpected node_name in supervisor.plan: {node_name}")
 
     outer_thread_id = f"outer-{uuid.uuid4()}"
 
     async with build_production_checkpointer() as checkpointer:
-        with patch("supervisor.router.get_llm", side_effect=fake_top_get_llm):
+        with patch("supervisor.router.get_llm", side_effect=fake_top_get_llm), \
+             patch("supervisor.plan.get_llm", side_effect=fake_plan_get_llm):
             supervisor_graph = build_supervisor_graph(checkpointer=checkpointer)
             config = build_supervisor_config(outer_thread_id)
 
@@ -154,15 +175,12 @@ async def test_needs_execution_placeholder():
 
     assert not result.get("__interrupt__")
     assert result.get("classification") == "needs_execution"
-    assert result.get("response"), "expected a short placeholder response"
-    assert result.get("response") != "Hi! How can I help with your SysML v2 requirements or diagrams today?", (
-        "must NOT be answered as small talk"
-    )
+    assert result.get("response") is None, "must NOT be answered as small talk"
+    assert result.get("plan_state") is not None, "expected needs_execution to route onward (plan_node), not dead-end"
     assert result.get("done") is True
-    assert result.get("result") == "needs_execution"
     print(f"input='generate an operational requirement for braking' -> classification="
           f"{result.get('classification')!r} response={result.get('response')!r}")
-    print("assert OK: NOT answered as small talk -- marked for real work (Steps 2-3 will dispatch it)")
+    print("assert OK: NOT answered as small talk -- correctly routed onward for real work")
 
     await clear_checkpoints()
     await cleanup_user(user)
@@ -260,7 +278,7 @@ async def test_state_forward_compatible_placeholders():
 
 async def main() -> None:
     await test_simple_response()
-    await test_needs_execution_placeholder()
+    await test_needs_execution_routes_onward()
     await test_unclear_clarify()
     await test_state_forward_compatible_placeholders()
     print("\n=== SUPERVISOR HUB (LAYER-1 STEP 1) TEST SUITE PASSED ===")
