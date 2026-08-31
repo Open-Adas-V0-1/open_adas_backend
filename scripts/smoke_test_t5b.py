@@ -179,11 +179,12 @@ async def test_unambiguous_direct_route():
 
 
 # ---------------------------------------------------------------------------
-# Scenario 2: ambiguous (2 active requirements, none named) -> pauses with
-# select_requirement pattern -> resume with a selection -> processing targets the chosen one.
+# Scenario 2: ambiguous (2 active requirements, none named) -> pauses with the
+# select_requirements_for_diagram MULTI-SELECT pattern (Step 4) -> resume selecting
+# ONE of the two -> processing targets the chosen one.
 # ---------------------------------------------------------------------------
 async def test_ambiguous_select_requirement():
-    print("\n--- Scenario: ambiguous (2 active requirements) -> select_requirement -> resume selection ---")
+    print("\n--- Scenario: ambiguous (2 active requirements) -> select_requirements_for_diagram -> resume selection ---")
     user, session = await setup_user_project_session()
 
     async with async_session_factory() as db:
@@ -237,14 +238,15 @@ async def test_ambiguous_select_requirement():
             )
             assert result_1.get("__interrupt__"), "expected pause at user_confirm_inputs"
             payload = result_1["__interrupt__"][0].value
-            assert payload["pattern"] == "select_requirement"
+            assert payload["pattern"] == "select_requirements_for_diagram"
+            assert payload["multi_select"] is True and payload["min_selected"] == 1 and payload["allow_all"] is True
             option_ids = {o["id"] for o in payload["options"]}
             assert option_ids == {str(req_a.id), str(req_b.id)}, "options must list BOTH active requirements"
             print(f"RUN 1: paused at user_confirm_inputs. pattern={payload['pattern']!r} "
                   f"question={payload['question']!r} options={payload['options']}")
 
             result_2 = await middle_graph.ainvoke(
-                Command(resume={"action": "confirm", "selected_id": str(req_b.id)}), config
+                Command(resume={"action": "confirm", "selected_ids": [str(req_b.id)]}), config
             )
             assert result_2.get("__interrupt__"), "expected layer-3 to now pause at requirement_review"
             payload_2 = result_2["__interrupt__"][0].value
@@ -314,7 +316,7 @@ async def test_cancel_path():
             )
             assert result_1.get("__interrupt__")
             payload = result_1["__interrupt__"][0].value
-            assert payload["pattern"] == "select_requirement"
+            assert payload["pattern"] == "select_requirements_for_diagram"
             print(f"RUN 1: paused at user_confirm_inputs with {len(payload['options'])} options")
 
             result_2 = await middle_graph.ainvoke(Command(resume={"action": "cancel"}), config)

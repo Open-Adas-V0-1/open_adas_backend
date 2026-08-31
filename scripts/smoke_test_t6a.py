@@ -311,14 +311,14 @@ async def test_ambiguous_bubbles_through_top():
             )
             assert result_1.get("__interrupt__"), "expected user_confirm_inputs to bubble to the top caller"
             payload_1 = result_1["__interrupt__"][0].value
-            assert payload_1["pattern"] == "select_requirement"
+            assert payload_1["pattern"] == "select_requirements_for_diagram"
             option_ids = {o["id"] for o in payload_1["options"]}
             assert option_ids == {str(req_a.id), str(req_b.id)}
             print(f"RUN 1: user_confirm_inputs bubbled to the TOP caller. pattern={payload_1['pattern']!r} "
                   f"options={payload_1['options']}")
 
             result_2 = await top_graph.ainvoke(
-                Command(resume={"action": "confirm", "selected_id": str(req_b.id)}), config
+                Command(resume={"action": "confirm", "selected_ids": [str(req_b.id)]}), config
             )
             assert result_2.get("__interrupt__"), "expected layer-3's requirement_review to now pause"
             payload_2 = result_2["__interrupt__"][0].value

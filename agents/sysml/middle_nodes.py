@@ -11,6 +11,7 @@ from app.schemas.confirmations import (
     ConfirmDiagramTypePattern,
     RequirementOption,
     SelectRequirementPattern,
+    SelectRequirementsForDiagramPattern,
 )
 from app.schemas.processing_input import ProcessingInput
 from app.schemas.sysml import Intent, MiddleDecision
@@ -63,6 +64,7 @@ async def middle_supervisor(state: MiddleState, config: RunnableConfig) -> dict:
             "supervisor_visits": visits,
             "resolved_intent": None,
             "pending_pattern": None,
+            "target_requirement_ids": None,
             "result": "stopped: max supervisor visits reached",
         }
 
@@ -96,6 +98,7 @@ async def middle_supervisor(state: MiddleState, config: RunnableConfig) -> dict:
             "supervisor_visits": visits,
             "resolved_intent": None,
             "pending_pattern": None,
+            "target_requirement_ids": None,
             "clarifying_message": decision.message,
             "result": "no_action",
         }
@@ -103,6 +106,7 @@ async def middle_supervisor(state: MiddleState, config: RunnableConfig) -> dict:
     resolved_intent = decision.resolved_intent.value if decision.resolved_intent else None
     diagram_type = decision.diagram_type.value if decision.diagram_type else None
     concerns_existing_requirement = resolved_intent in _REQUIREMENT_TARGETING_INTENTS
+    is_diagram = resolved_intent in (Intent.generate_diagram.value, Intent.modify_diagram.value)
 
     if concerns_existing_requirement:
         if decision.named_requirement_id:
@@ -112,6 +116,7 @@ async def middle_supervisor(state: MiddleState, config: RunnableConfig) -> dict:
                 "resolved_intent": resolved_intent,
                 "diagram_type": diagram_type,
                 "target_requirement_id": decision.named_requirement_id,
+                "target_requirement_ids": None,
                 "pending_pattern": None,
                 "clarifying_message": None,
                 "processing_counter": (state.get("processing_counter") or 0) + 1,
@@ -123,20 +128,34 @@ async def middle_supervisor(state: MiddleState, config: RunnableConfig) -> dict:
                 "resolved_intent": resolved_intent,
                 "diagram_type": diagram_type,
                 "target_requirement_id": str(active_requirements[0].id),
+                "target_requirement_ids": None,
                 "pending_pattern": None,
                 "clarifying_message": None,
                 "processing_counter": (state.get("processing_counter") or 0) + 1,
             }
         if len(active_requirements) > 1:
             # >1 active requirement and none named -> genuinely ambiguous.
+            options = [{"id": str(r.id), "summary": r.content[:120]} for r in active_requirements]
+            if is_diagram:
+                # A diagram may represent SEVERAL requirements at once -> multi-select,
+                # not a single pick. modify_requirement (below) still targets exactly one.
+                return {
+                    "supervisor_visits": visits,
+                    "resolved_intent": resolved_intent,
+                    "diagram_type": diagram_type,
+                    "target_requirement_ids": None,
+                    "pending_pattern": "select_requirements_for_diagram",
+                    "pending_options_source": options,
+                    "pending_action_context": "select_diagram_targets",
+                    "clarifying_message": None,
+                }
             return {
                 "supervisor_visits": visits,
                 "resolved_intent": resolved_intent,
                 "diagram_type": diagram_type,
+                "target_requirement_ids": None,
                 "pending_pattern": "select_requirement",
-                "pending_options_source": [
-                    {"id": str(r.id), "summary": r.content[:120]} for r in active_requirements
-                ],
+                "pending_options_source": options,
                 "clarifying_message": None,
             }
         # zero active requirements: nothing to be ambiguous about — let layer-3's own
@@ -147,6 +166,7 @@ async def middle_supervisor(state: MiddleState, config: RunnableConfig) -> dict:
         "resolved_intent": resolved_intent,
         "diagram_type": diagram_type,
         "requested_level": decision.level.value if decision.level else None,
+        "target_requirement_ids": None,
         "pending_pattern": None,
         "clarifying_message": None,
         "processing_counter": (state.get("processing_counter") or 0) + 1,
@@ -317,7 +337,13 @@ async def build_structured_format(state: MiddleState) -> dict:
     intent = "generate_diagram" if is_diagram else "generate_requirement"
 
     target_requirement_id = state.get("target_requirement_id")
-    target_ids = [target_requirement_id] if (is_diagram and target_requirement_id) else []
+    multi_targets = state.get("target_requirement_ids")
+    if is_diagram:
+        # A multi-select resolution (Step 4) takes precedence when present; the single
+        # target_requirement_id (named/sole-candidate unambiguous path) is the fallback.
+        target_ids = list(multi_targets) if multi_targets else ([target_requirement_id] if target_requirement_id else [])
+    else:
+        target_ids = []
 
     # For a diagram, target_requirement_id IS the source (the requirement it
     # represents). For a requirement, the source is either an existing requirement
@@ -339,10 +365,39 @@ async def build_structured_format(state: MiddleState) -> dict:
     return {"processing_input": processing_input.model_dump(mode="json")}
 
 
+def _build_confirm_payload(pattern_name: str | None, question_text: str, options_source: list[dict]) -> dict:
+    if pattern_name == "select_requirement":
+        return SelectRequirementPattern(
+            question=question_text,
+            options=[RequirementOption(**o) for o in options_source],
+        ).model_dump()
+    if pattern_name == "select_requirements_for_diagram":
+        return SelectRequirementsForDiagramPattern(
+            question=question_text,
+            options=[RequirementOption(**o) for o in options_source],
+        ).model_dump()
+    if pattern_name == "confirm_diagram_type":
+        return ConfirmDiagramTypePattern(question=question_text).model_dump()
+    if pattern_name == "clarify_request":
+        return ClarifyRequestPattern(question=question_text).model_dump()
+    return ConfirmActionPattern(question=question_text).model_dump()
+
+
+def _extract_selected_ids(decision, options_source: list[dict]) -> list[str]:
+    if not isinstance(decision, dict):
+        return []
+    if decision.get("select_all"):
+        return [o["id"] for o in options_source]
+    return list(decision.get("selected_ids") or [])
+
+
 async def user_confirm_inputs(state: MiddleState) -> dict:
-    """HITL node: only reached when middle_supervisor found genuine ambiguity. Builds
-    a FIXED-STRUCTURE confirmation pattern with deterministic, repository-derived
-    options; the LLM phrases only the accompanying question text.
+    """HITL node: only reached when middle_supervisor, validate_inputs, or resolve_level
+    found something genuinely needing user input. Builds a FIXED-STRUCTURE confirmation
+    pattern with deterministic, repository-derived options; the LLM phrases only the
+    accompanying question text. ALL user interaction happens here, via interrupt() —
+    this pauses the graph and bubbles the payload up to whoever invoked the middle
+    graph; there is no direct call to Layer 1 from anywhere in this subgraph.
     """
     pattern_name = state.get("pending_pattern")
     options_source = state.get("pending_options_source") or []
@@ -356,21 +411,29 @@ async def user_confirm_inputs(state: MiddleState) -> dict:
         reason=state.get("clarifying_message") or "",
     )
     question_text = (await llm.ainvoke(prompt)).content
-
-    if pattern_name == "select_requirement":
-        payload = SelectRequirementPattern(
-            question=question_text,
-            options=[RequirementOption(**o) for o in options_source],
-        ).model_dump()
-    elif pattern_name == "confirm_diagram_type":
-        payload = ConfirmDiagramTypePattern(question=question_text).model_dump()
-    elif pattern_name == "clarify_request":
-        payload = ClarifyRequestPattern(question=question_text).model_dump()
-    else:
-        payload = ConfirmActionPattern(question=question_text).model_dump()
+    payload = _build_confirm_payload(pattern_name, question_text, options_source)
 
     # No side effects above this line — this node re-runs from the top on resume.
     decision = interrupt(payload)
+
+    if pattern_name == "select_requirements_for_diagram":
+        # Enforce min_selected=1: re-interrupt (ask again) rather than silently
+        # accepting an empty selection or crashing. Bounded retries — fail-open to
+        # cancel rather than looping forever against a persistently broken client.
+        min_selected = payload.get("min_selected", 1)
+        attempts = 0
+        while True:
+            action = decision.get("action") if isinstance(decision, dict) else decision
+            if action != "confirm" or _extract_selected_ids(decision, options_source):
+                break
+            attempts += 1
+            if attempts >= 3:
+                decision = {"action": "cancel"}
+                break
+            decision = interrupt({
+                **payload,
+                "error": f"Select at least {min_selected} requirement(s) before confirming.",
+            })
 
     action = decision.get("action") if isinstance(decision, dict) else decision
     selected_id = decision.get("selected_id") if isinstance(decision, dict) else None
@@ -383,6 +446,7 @@ async def user_confirm_inputs(state: MiddleState) -> dict:
             "pending_pattern": None,
             "pending_options_source": None,
             "pending_action_context": None,
+            "target_requirement_ids": None,
         }
 
         if action_context == "missing_level_source":
@@ -406,7 +470,17 @@ async def user_confirm_inputs(state: MiddleState) -> dict:
                 update["resolved_source_id"] = selected_id
             return update
 
-        # default (existing behavior): selecting/confirming a TARGET requirement.
+        if action_context == "select_diagram_targets":
+            # Multi-select: the requirements this diagram should represent.
+            selected_ids = _extract_selected_ids(decision, options_source)
+            return {
+                **base_update,
+                "confirm_decision": "confirmed",
+                "processing_counter": (state.get("processing_counter") or 0) + 1,
+                "target_requirement_ids": selected_ids,
+            }
+
+        # default (existing behavior): selecting/confirming a single TARGET requirement.
         update = {**base_update, "confirm_decision": "confirmed",
                   "processing_counter": (state.get("processing_counter") or 0) + 1}
         if selected_id:
@@ -424,6 +498,7 @@ async def user_confirm_inputs(state: MiddleState) -> dict:
             "resolved_intent": None,
             "input_valid": None,
             "invalid_reason": None,
+            "target_requirement_ids": None,
             "user_input": new_user_input or state.get("user_input"),
         }
 
@@ -435,6 +510,7 @@ async def user_confirm_inputs(state: MiddleState) -> dict:
         "pending_options_source": None,
         "pending_action_context": None,
         "resolved_intent": None,
+        "target_requirement_ids": None,
         "result": "cancelled",
     }
 
@@ -477,14 +553,14 @@ async def sysml_processing(state: MiddleState, config: RunnableConfig) -> dict:
     # boundary — translation is its job, so layer-3 itself stays contract-agnostic.
     processing_input = ProcessingInput.model_validate(state["processing_input"])
 
-    # target_requirement_ids (diagram's represented requirement) takes precedence when
-    # set; source_id (either an existing requirement being modified, or resolve_level's
-    # higher-level source to derive from) is the fallback — layer-3's plan_node reads
-    # whichever ends up here as its source text, via its single target_requirement_id.
+    # target_requirement_ids (diagram's represented requirement(s)) takes precedence
+    # when set; source_id (either an existing requirement being modified, or
+    # resolve_level's higher-level source to derive from) is the fallback — layer-3's
+    # plan_node reads whichever ends up here as its source text, via its single
+    # target_requirement_id (the DB's Diagram.requirement_id FK is likewise singular).
+    target_ids = processing_input.target_requirement_ids
     target_requirement_id = (
-        str(processing_input.target_requirement_ids[0])
-        if processing_input.target_requirement_ids
-        else (str(processing_input.source_id) if processing_input.source_id else None)
+        str(target_ids[0]) if target_ids else (str(processing_input.source_id) if processing_input.source_id else None)
     )
 
     l3_input = {
@@ -494,6 +570,20 @@ async def sysml_processing(state: MiddleState, config: RunnableConfig) -> dict:
         "level": processing_input.level.value,
         "diagram_type": processing_input.diagram_type.value if processing_input.diagram_type else None,
     }
+
+    if len(target_ids) > 1:
+        # A multi-select diagram: layer-3's own entry state only carries ONE source id
+        # (matching the DB's single-FK Diagram.requirement_id), but plan_node prefers a
+        # pre-set source_requirement_content over its own single-id fetch — so feed it
+        # the CONCATENATED content of every selected requirement here, at the
+        # translation boundary, without touching layer-3's node code.
+        async with async_session_factory() as db:
+            requirements = [
+                r for rid in target_ids
+                if (r := await RequirementRepo.get_by_id(db, id=rid, session_id=processing_input.session_id))
+            ]
+        if requirements:
+            l3_input["source_requirement_content"] = "\n\n---\n\n".join(r.content for r in requirements)
 
     # If layer-3 pauses here (interrupt), this raises internally and propagates all the
     # way up through this node, through the middle graph's runner, to whoever invoked

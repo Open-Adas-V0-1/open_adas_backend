@@ -11,6 +11,8 @@ proceeding, or to confirm before an action is taken.
 2. Write ONE short question sentence appropriate to that pattern:
    - select_requirement: ask which requirement (among the ones about to be shown) the
      user means.
+   - select_requirements_for_diagram: ask WHICH requirement(s) — one or more — this
+     diagram should represent, among the ones about to be shown as checkboxes.
    - confirm_diagram_type: ask which diagram type they want.
    - confirm_action: ask a plain yes/no confirmation for the pending action.
    - clarify_request: the request couldn't be understood or processed at all — ask the

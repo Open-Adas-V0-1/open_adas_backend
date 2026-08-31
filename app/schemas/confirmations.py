@@ -36,6 +36,21 @@ class ConfirmActionPattern(BaseModel):
     options: list[str] = Field(default_factory=lambda: ["yes", "no"])
 
 
+class SelectRequirementsForDiagramPattern(BaseModel):
+    """Fixed multi-select (checkbox) structure the frontend renders for choosing WHICH
+    requirements a diagram should represent. Triggered only when the user asked for a
+    diagram, didn't name the target(s), and there's more than one candidate requirement
+    in context — an explicit name, or exactly one candidate, skips this entirely.
+    """
+
+    pattern: Literal["select_requirements_for_diagram"] = "select_requirements_for_diagram"
+    question: str
+    options: list[RequirementOption]
+    multi_select: bool = True
+    min_selected: int = 1
+    allow_all: bool = True
+
+
 class ClarifyRequestPattern(BaseModel):
     """Open clarification ask — no fixed options; the frontend renders a free-text
     input rather than buttons. Used when validate_inputs finds the request isn't

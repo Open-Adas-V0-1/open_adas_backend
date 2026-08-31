@@ -16,6 +16,11 @@ class MiddleState(TypedDict, total=False):
     # middle_supervisor (named or sole active requirement) or via user_confirm_inputs
     # when genuinely ambiguous.
     target_requirement_id: uuid.UUID | str | None
+    # MULTIPLE requirements a diagram represents, when resolved via the multi-select
+    # select_requirements_for_diagram confirm (Step 4) rather than a single target.
+    # Reset to None at the start of every middle_supervisor visit; only set by
+    # user_confirm_inputs's multi-select branch, consumed by build_structured_format.
+    target_requirement_ids: list[str] | None
 
     # validate_inputs (runs BEFORE resolve_level): is this input processable at all?
     # (known/actionable intent, coherent session/project context). File validity is a
