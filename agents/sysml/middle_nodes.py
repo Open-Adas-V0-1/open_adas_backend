@@ -12,9 +12,10 @@ from app.schemas.confirmations import (
     RequirementOption,
     SelectRequirementPattern,
 )
+from app.schemas.processing_input import ProcessingInput
 from app.schemas.sysml import Intent, MiddleDecision
 from data.db import async_session_factory
-from data.models import RequirementLevel
+from data.models import DiagramType, RequirementLevel
 from data.repository import RequirementRepo, SessionRepo
 from harness.guards import checkpoint_durability
 from harness.thread_ttl import touch_thread
@@ -221,7 +222,7 @@ def route_from_validate_inputs(state: MiddleState) -> str:
         return "user_confirm_inputs"
     if state.get("resolved_intent") in _LEVEL_BEARING_INTENTS:
         return "resolve_level"
-    return "sysml_processing"
+    return "build_structured_format"
 
 
 async def resolve_level(state: MiddleState) -> dict:
@@ -297,7 +298,45 @@ async def resolve_level(state: MiddleState) -> dict:
 def route_from_resolve_level(state: MiddleState) -> str:
     if state.get("pending_pattern"):
         return "user_confirm_inputs"
-    return "sysml_processing"
+    return "build_structured_format"
+
+
+async def build_structured_format(state: MiddleState) -> dict:
+    """Assembles the unified Layer-2 -> Layer-3 contract (ProcessingInput) from the
+    fields already resolved by validate_inputs (Step 2), resolve_level (Step 1), and
+    middle_supervisor / user_confirm_inputs's ambiguity resolution. No LLM call, no DB
+    read — purely deterministic reshaping of state already in hand.
+
+    Layer-3 always receives this SAME shape regardless of where the request came from
+    (text today; a file-derived extraction later — see ProcessingInput's extension
+    spot). References only (source_id, target_requirement_ids) — sysml_processing
+    (and, through it, layer-3) reads content from the repository when it needs it.
+    """
+    resolved_intent = state.get("resolved_intent")
+    is_diagram = resolved_intent in (Intent.generate_diagram.value, Intent.modify_diagram.value)
+    intent = "generate_diagram" if is_diagram else "generate_requirement"
+
+    target_requirement_id = state.get("target_requirement_id")
+    target_ids = [target_requirement_id] if (is_diagram and target_requirement_id) else []
+
+    # For a diagram, target_requirement_id IS the source (the requirement it
+    # represents). For a requirement, the source is either an existing requirement
+    # being modified (also carried in target_requirement_id) or the higher-level
+    # artifact resolve_level derived (resolved_source_id) — mirrors the fallback the
+    # wrapper used to apply itself before this contract existed.
+    source_id = None if is_diagram else (target_requirement_id or state.get("resolved_source_id"))
+
+    processing_input = ProcessingInput(
+        intent=intent,
+        level=RequirementLevel(state.get("requested_level") or "functional"),
+        source_id=source_id,
+        target_requirement_ids=target_ids,
+        diagram_type=DiagramType(state["diagram_type"]) if state.get("diagram_type") else None,
+        user_input=state.get("user_input", ""),
+        session_id=state["session_id"],
+    )
+
+    return {"processing_input": processing_input.model_dump(mode="json")}
 
 
 async def user_confirm_inputs(state: MiddleState) -> dict:
@@ -405,7 +444,7 @@ def route_from_user_confirm(state: MiddleState) -> str:
     if decision == "confirmed_pivot_source":
         return "resolve_level"
     if decision == "confirmed":
-        return "sysml_processing"
+        return "build_structured_format"
     if decision == "modified":
         return "middle_supervisor"
     return END  # cancelled, or unrecognized -> fail-open to END
@@ -432,14 +471,28 @@ async def sysml_processing(state: MiddleState, config: RunnableConfig) -> dict:
         "configurable": {**config["configurable"], "thread_id": proc_thread_id},
     }
 
-    # target_requirement_id (diagram's base requirement) takes precedence when set;
-    # resolved_source_id (resolve_level's higher-level source to derive from) is the
-    # fallback — layer-3's plan_node reads whichever ends up here as its source text.
+    # Translate the unified Layer-2 -> Layer-3 contract (ProcessingInput, built by
+    # build_structured_format) onto exactly what the rebuilt layer-3 graph expects at
+    # its entry (agents/sysml/state.py: SysmlState). This is the "inside a node"
+    # boundary — translation is its job, so layer-3 itself stays contract-agnostic.
+    processing_input = ProcessingInput.model_validate(state["processing_input"])
+
+    # target_requirement_ids (diagram's represented requirement) takes precedence when
+    # set; source_id (either an existing requirement being modified, or resolve_level's
+    # higher-level source to derive from) is the fallback — layer-3's plan_node reads
+    # whichever ends up here as its source text, via its single target_requirement_id.
+    target_requirement_id = (
+        str(processing_input.target_requirement_ids[0])
+        if processing_input.target_requirement_ids
+        else (str(processing_input.source_id) if processing_input.source_id else None)
+    )
+
     l3_input = {
-        "user_input": state.get("user_input", ""),
-        "session_id": session_id,
-        "target_requirement_id": state.get("target_requirement_id") or state.get("resolved_source_id"),
-        "level": state.get("requested_level") or "functional",
+        "user_input": processing_input.user_input,
+        "session_id": processing_input.session_id,
+        "target_requirement_id": target_requirement_id,
+        "level": processing_input.level.value,
+        "diagram_type": processing_input.diagram_type.value if processing_input.diagram_type else None,
     }
 
     # If layer-3 pauses here (interrupt), this raises internally and propagates all the

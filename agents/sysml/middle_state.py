@@ -30,6 +30,12 @@ class MiddleState(TypedDict, total=False):
     resolved_source_id: uuid.UUID | str | None
     level_progress: list[str] | None
 
+    # build_structured_format: the unified Layer-2 -> Layer-3 contract (a
+    # ProcessingInput.model_dump()), assembled from the fields above once validity
+    # (Step 2) and level/source resolution (Step 1) are settled. sysml_processing
+    # consumes this directly rather than re-reading the individual fields above.
+    processing_input: dict | None
+
     # loop bookkeeping
     processing_counter: int  # how many processings dispatched so far -> drives proc_thread_id
     supervisor_visits: int  # loop guard

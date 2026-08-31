@@ -1,6 +1,7 @@
 from langgraph.graph import END, START, StateGraph
 
 from agents.sysml.middle_nodes import (
+    build_structured_format,
     middle_supervisor,
     resolve_level,
     route_from_middle_supervisor,
@@ -36,6 +37,7 @@ def build_middle_graph(checkpointer=None):
     builder.add_node("middle_supervisor", middle_supervisor)
     builder.add_node("validate_inputs", validate_inputs)
     builder.add_node("resolve_level", resolve_level)
+    builder.add_node("build_structured_format", build_structured_format)
     builder.add_node("user_confirm_inputs", user_confirm_inputs)
     builder.add_node("sysml_processing", sysml_processing)
 
@@ -56,7 +58,7 @@ def build_middle_graph(checkpointer=None):
         route_from_validate_inputs,
         {
             "resolve_level": "resolve_level",
-            "sysml_processing": "sysml_processing",
+            "build_structured_format": "build_structured_format",
             "user_confirm_inputs": "user_confirm_inputs",
         },
     )
@@ -65,7 +67,7 @@ def build_middle_graph(checkpointer=None):
         "resolve_level",
         route_from_resolve_level,
         {
-            "sysml_processing": "sysml_processing",
+            "build_structured_format": "build_structured_format",
             "user_confirm_inputs": "user_confirm_inputs",
         },
     )
@@ -75,12 +77,13 @@ def build_middle_graph(checkpointer=None):
         route_from_user_confirm,
         {
             "resolve_level": "resolve_level",
-            "sysml_processing": "sysml_processing",
+            "build_structured_format": "build_structured_format",
             "middle_supervisor": "middle_supervisor",
             END: END,
         },
     )
 
+    builder.add_edge("build_structured_format", "sysml_processing")
     builder.add_edge("sysml_processing", "middle_supervisor")
 
     return builder.compile(checkpointer=checkpointer)
