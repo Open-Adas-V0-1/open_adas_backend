@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +15,7 @@ from data.models import (
     Requirement,
     RequirementLevel,
     Session,
+    ThreadActivity,
     User,
     VersionStatus,
 )
@@ -68,6 +70,10 @@ class SessionRepo:
         db.add(session)
         await db.flush()
         return session
+
+    @staticmethod
+    async def get_by_id(db: AsyncSession, id: uuid.UUID) -> Session | None:
+        return await db.get(Session, id)
 
     @staticmethod
     async def get_by_thread_id(db: AsyncSession, thread_id: str) -> Session | None:
@@ -206,6 +212,37 @@ class RequirementRepo:
         db.add(requirement)
         await db.flush()
         return requirement
+
+    @staticmethod
+    async def list_by_session_and_level(
+        db: AsyncSession, session_id: uuid.UUID, level: RequirementLevel
+    ) -> list[Requirement]:
+        """Active requirements at a given level in this thread (session_id == thread_id),
+        most recent first — used by resolve_level to find the SOURCE for a derivation
+        (e.g. the operational requirement(s) a functional one can derive from).
+        """
+        result = await db.execute(
+            select(Requirement)
+            .where(
+                Requirement.session_id == session_id,
+                Requirement.level == level,
+                Requirement.status == VersionStatus.active,
+            )
+            .order_by(Requirement.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def level_progress(db: AsyncSession, session_id: uuid.UUID) -> list[str]:
+        """Which levels have at least one APPROVED (active) requirement in this thread —
+        the forward-only Op->Func->Phys progress snapshot resolve_level reads.
+        """
+        result = await db.execute(
+            select(Requirement.level)
+            .where(Requirement.session_id == session_id, Requirement.status == VersionStatus.active)
+            .distinct()
+        )
+        return sorted({level.value for level in result.scalars().all()})
 
 
 class DiagramRepo:
@@ -389,3 +426,28 @@ class FileRepo:
     async def list_by_session(db: AsyncSession, session_id: uuid.UUID) -> list[File]:
         result = await db.execute(select(File).where(File.session_id == session_id))
         return list(result.scalars().all())
+
+
+class ThreadActivityRepo:
+    """Tracks last_accessed for CHECKPOINTER thread_ids only — never touches
+    requirements/diagrams. See harness/thread_ttl.py for the TTL policy built on top.
+    """
+
+    @staticmethod
+    async def touch(db: AsyncSession, thread_id: str, session_id: uuid.UUID) -> ThreadActivity:
+        # naive UTC, matching every other timestamp column in this schema (none use
+        # timezone=True) — harness/thread_ttl.py treats naive values as UTC on read.
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        existing = await db.get(ThreadActivity, thread_id)
+        if existing is None:
+            existing = ThreadActivity(thread_id=thread_id, session_id=session_id, last_accessed=now)
+            db.add(existing)
+        else:
+            existing.last_accessed = now
+        await db.flush()
+        return existing
+
+    @staticmethod
+    async def get_last_accessed(db: AsyncSession, thread_id: str):
+        row = await db.get(ThreadActivity, thread_id)
+        return row.last_accessed if row else None

@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     sysml_mcp_server_path: str | None = None  # defaults to tools/sysml_v2/node_modules/.../mcpServer.js
     sysml_tooling_timeout: float = 30.0
 
+    # ── SysML processing thread TTL (checkpointer state only, never approved artifacts) ──
+    sysml_thread_ttl_days: int = 30
+
     @property
     def database_url(self) -> str:
         return (

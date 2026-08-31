@@ -24,7 +24,7 @@ from app.config import get_settings  # noqa: E402
 from app.schemas.sysml import Intent, IntentDecision, MiddleDecision  # noqa: E402
 from app.schemas.supervisor import AgentTarget, TopDecision  # noqa: E402
 from data.db import async_session_factory  # noqa: E402
-from data.models import DiagramType, VersionStatus  # noqa: E402
+from data.models import DiagramType, RequirementLevel, VersionStatus  # noqa: E402
 from data.repository import DiagramRepo, ProjectRepo, RequirementRepo, SessionRepo, UserRepo  # noqa: E402
 from harness.checkpointer import build_production_checkpointer  # noqa: E402
 from supervisor.graph import build_supervisor_config, build_supervisor_graph  # noqa: E402
@@ -140,9 +140,14 @@ async def test_full_nesting_unambiguous():
             TopDecision(active_agent=None, intent_complete=True),
         ]
     )
+    # level=operational so resolve_level (Layer-2's level ordering) admits it
+    # immediately with no source requirement — this scenario's focus is 3-level
+    # nesting, not level ordering (see scripts/smoke_test_level_resolution.py).
     middle_llm = FakeStructuredWrapperLLM(
         [
-            MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement),
+            MiddleDecision(
+                has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational
+            ),
             MiddleDecision(has_request=False, message="Nothing further to process."),
         ]
     )
@@ -351,7 +356,10 @@ async def test_encryption_at_rest():
     )
 
     top_llm = FakeStructuredWrapperLLM(TopDecision(active_agent=AgentTarget.sysml, intent_complete=False))
-    middle_llm = FakeStructuredWrapperLLM(MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement))
+    # level=operational so resolve_level admits it with no source requirement.
+    middle_llm = FakeStructuredWrapperLLM(
+        MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational)
+    )
     layer3_supervisor_llm = FakeStructuredWrapperLLM(IntentDecision(intent=Intent.generate_requirement))
     plan_llm = FakeSequenceLLM(["Requirement def with subject Vehicle and a marker constraint."])
     generate_llm = FakeSequenceLLM([draft])

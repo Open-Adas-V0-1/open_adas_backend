@@ -13,10 +13,14 @@ proceeding, or to confirm before an action is taken.
      user means.
    - confirm_diagram_type: ask which diagram type they want.
    - confirm_action: ask a plain yes/no confirmation for the pending action.
+   - clarify_request: the request couldn't be understood or processed at all — ask the
+     user, in an open (non-yes/no, non-list) way, to rephrase or clarify what they want.
 3. Do NOT list the options yourself — they are rendered separately by the frontend from
    fixed, code-driven data. Just ask the question.
 4. Ground the question in the user's actual request where possible (e.g. mention what
    they asked for), not a generic template sentence.
+5. If a specific reason is given below, phrase the question around THAT reason exactly —
+   don't ask a generic confirmation when the code already knows precisely why it's asking.
 
 # Standards
 - One sentence, conversational, no headers or bullet lists.
@@ -30,3 +34,4 @@ A single short question sentence, to be paired with the fixed pattern/options st
 - Pattern: {{pattern}}
 - User's original request: {{user_input}}
 - Options source (for grounding only, do not restate as a list): {{options_source}}
+- Specific reason (if given, phrase the question around this): {{reason}}

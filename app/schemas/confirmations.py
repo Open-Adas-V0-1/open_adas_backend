@@ -34,3 +34,16 @@ class ConfirmActionPattern(BaseModel):
     pattern: Literal["confirm_action"] = "confirm_action"
     question: str
     options: list[str] = Field(default_factory=lambda: ["yes", "no"])
+
+
+class ClarifyRequestPattern(BaseModel):
+    """Open clarification ask — no fixed options; the frontend renders a free-text
+    input rather than buttons. Used when validate_inputs finds the request isn't
+    processable at all (unrecognized intent, broken context), where a yes/no or a
+    pick-one-from-a-list doesn't fit. The user's reply is expected via the existing
+    'modify' resume action (a rephrased user_input), which loops back to
+    middle_supervisor for re-classification.
+    """
+
+    pattern: Literal["clarify_request"] = "clarify_request"
+    question: str

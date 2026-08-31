@@ -25,6 +25,7 @@ from agents.sysml.middle_graph import build_middle_config, build_middle_graph
 from app.config import get_settings
 from app.schemas.sysml import Intent, IntentDecision, MiddleDecision
 from data.db import async_session_factory
+from data.models import RequirementLevel
 from data.repository import ProjectRepo, RequirementRepo, SessionRepo, UserRepo
 
 
@@ -112,9 +113,14 @@ async def main() -> None:
     # middle_supervisor is consulted twice: once to dispatch, once after the processing
     # loops back — the second time it must say "nothing more to do" or the loop guard
     # would eventually stop it anyway.
+    # level=operational so resolve_level (Layer-2's level ordering, added later) admits
+    # it immediately with no source requirement — this test's focus is nesting
+    # mechanics, not level ordering (see scripts/smoke_test_level_resolution.py).
     middle_llm = FakeStructuredWrapperLLM(
         [
-            MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement),
+            MiddleDecision(
+                has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational
+            ),
             MiddleDecision(has_request=False, message="Nothing further to process."),
         ]
     )

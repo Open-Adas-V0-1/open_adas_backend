@@ -187,3 +187,17 @@ class File(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     session: Mapped["Session"] = relationship(back_populates="files")
+
+
+class ThreadActivity(Base):
+    """Tracks last_accessed for a CHECKPOINTER thread_id (the middle layer's own
+    session-level thread, or a layer-3 per-processing 'proc' thread) — never the
+    approved artifacts. Used for lazy TTL expiry of checkpointer state only; rows here
+    have no bearing on requirements/diagrams, which are permanent regardless of TTL.
+    """
+
+    __tablename__ = "thread_activity"
+
+    thread_id: Mapped[str] = mapped_column(primary_key=True)
+    session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"))
+    last_accessed: Mapped[datetime] = mapped_column(server_default=func.now())
