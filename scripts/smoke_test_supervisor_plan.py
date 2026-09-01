@@ -267,25 +267,30 @@ async def test_multi_part_ordered_plan():
             supervisor_graph = build_supervisor_graph(checkpointer=checkpointer)
             config = build_supervisor_config(outer_thread_id)
 
-            result = await supervisor_graph.ainvoke(
+            result_0 = await supervisor_graph.ainvoke(
                 {
                     "user_input": "generate a braking requirement, then its diagram, then a speed requirement",
                     "session_id": session.id,
                 },
                 config,
             )
-            assert result.get("__interrupt__"), "expected task-1's automatic execution to reach layer-3 review"
+            # 3 tasks -> COMPLEX (Layer-1 rebuild Step 4) -> plan_review gates execution
+            # first; the ordered TODO (with dependency) is already fully visible here,
+            # before any task has started.
+            assert result_0.get("__interrupt__"), "expected plan_review to pause BEFORE execution (complex plan)"
+            payload_0 = result_0["__interrupt__"][0].value
+            assert payload_0["pattern"] == "plan_review"
 
-            plan_state = result.get("plan_state")
+            plan_state = result_0.get("plan_state")
             tasks = plan_state["tasks"]
             assert len(tasks) == 3
             assert [t["id"] for t in tasks] == ["task-1", "task-2", "task-3"]
             assert tasks[0]["intent"] == "generate_requirement" and tasks[0]["depends_on"] is None
-            assert tasks[0]["status"] == "in_progress", "task-1 (no dependency) starts first"
+            assert tasks[0]["status"] == "pending", "nothing has started yet -- plan_review runs first"
             assert tasks[1]["intent"] == "generate_diagram" and tasks[1]["depends_on"] == "task-1", (
                 "the diagram task must depend on ITS requirement task (task-1), not float free"
             )
-            assert tasks[1]["status"] == "pending", "the diagram task must wait for its dependency"
+            assert tasks[1]["status"] == "pending"
             assert tasks[2]["intent"] == "generate_requirement" and tasks[2]["depends_on"] is None
             assert tasks[2]["status"] == "pending"
             # order correctness: the diagram's dependency must appear EARLIER in the list.
@@ -293,13 +298,21 @@ async def test_multi_part_ordered_plan():
             assert dep_index[tasks[1]["depends_on"]] < dep_index[tasks[1]["id"]], (
                 "dependency task must come BEFORE the dependent task"
             )
-            print("assert OK: ordered 3-item TODO:")
+            print("assert OK: ordered 3-item TODO, visible in plan_review BEFORE any execution:")
             for t in tasks:
                 print(f"    {t['id']}: intent={t['intent']!r} level={t['level']!r} "
                       f"depends_on={t['depends_on']!r} status={t['status']!r}")
             print("assert OK: diagram task (task-2) depends on its requirement task (task-1), "
-                  "which correctly precedes it and started first; the unrelated speed requirement "
-                  "(task-3) has no dependency")
+                  "which correctly precedes it; the unrelated speed requirement (task-3) has no dependency")
+
+            result = await supervisor_graph.ainvoke(Command(resume={"action": "approve"}), config)
+            assert result.get("__interrupt__"), "expected task-1's execution to now reach layer-3 review"
+            tasks = result["plan_state"]["tasks"]
+            assert tasks[0]["status"] == "in_progress", "task-1 (no dependency) starts first, after approval"
+            assert tasks[1]["status"] == "pending", "the diagram task must wait for its dependency"
+            assert tasks[2]["status"] == "pending"
+            print("assert OK: after plan_review approval, task-1 (no dependency) started first, "
+                  "task-2 (depends on task-1) correctly still pending")
 
             await supervisor_graph.ainvoke(Command(resume={"action": "approve"}), config)
 

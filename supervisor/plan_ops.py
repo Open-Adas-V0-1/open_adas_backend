@@ -1,7 +1,41 @@
 """Deterministic (router-as-code) helpers over plan_state -- the TODO list built by
 plan_node (Step 2). No LLM calls here; pure reads/transforms of state already in hand.
-Shared by top_level_supervisor (task selection) and sysml_middle_node (task execution).
+Shared by top_level_supervisor (task selection), sysml_middle_node (task execution),
+plan_node (initial build), and plan_review (the light re-validation path for edits).
 """
+
+from app.schemas.supervisor import PlannedTask, TodoItem, TodoStatus
+
+# More than this many tasks counts as a "complex" plan needing plan_review's HITL
+# approval; a single-task plan is "simple" and skips straight to execution. Easy to
+# adjust as the definition of "worth confirming" evolves.
+PLAN_REVIEW_TASK_THRESHOLD = 1
+
+
+def is_complex_plan(plan_state: dict, threshold: int = PLAN_REVIEW_TASK_THRESHOLD) -> bool:
+    return len(plan_state.get("tasks") or []) > threshold
+
+
+def build_todo_items(planned_tasks: list[PlannedTask]) -> list[TodoItem]:
+    """Deterministically builds fresh TodoItems (sequential ids, remapped
+    dependencies, all reset to pending) from an ordered PlannedTask list. Used by BOTH
+    plan_node (after the LLM's initial decomposition) and plan_review (after the user
+    edits the plan) -- the SAME construction logic either way, so edits stay just as
+    internally consistent as a freshly-decomposed plan (ids/dependencies always
+    re-derived from CURRENT order, never left dangling from a prior edit).
+    """
+    return [
+        TodoItem(
+            id=f"task-{i}",
+            description=t.description,
+            intent=t.intent,
+            level=t.level,
+            depends_on=f"task-{t.depends_on_task_number}" if t.depends_on_task_number else None,
+            status=TodoStatus.pending,
+            result_ref=None,
+        )
+        for i, t in enumerate(planned_tasks, start=1)
+    ]
 
 
 def next_pending_task(plan_state: dict) -> dict | None:

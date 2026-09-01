@@ -17,8 +17,14 @@ class SupervisorState(TypedDict, total=False):
     # the TODO-list plan (Step 2): a PlanState.model_dump() -- {tasks: [...], "
     # original_request": str}, built by plan_node ONLY for needs_execution. None until
     # a plan is built; None again once a fresh turn starts. Step 3's execution loop
-    # consumes this to drive delegation; Step 4 adds conditional plan_review over it.
+    # consumes this to drive delegation.
     plan_state: dict | None
+
+    # plan-level HITL (Step 4): only set while a plan is under review. "approved" and
+    # "modified" both proceed to execution (Step 3) with plan_state as-is/edited;
+    # "cancelled" ends the turn. None for simple (single-task) plans, which skip
+    # plan_review entirely.
+    plan_review_decision: str | None  # "approved" | "modified" | "cancelled"
 
     # LIGHT references from delegated tasks -- never full artifact content. A
     # placeholder list here (unused until Step 3); Step 3's delegation path appends to it.

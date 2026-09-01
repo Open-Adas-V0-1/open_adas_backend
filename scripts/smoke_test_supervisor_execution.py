@@ -267,11 +267,17 @@ async def test_multi_task_no_stop_between():
             supervisor_graph = build_supervisor_graph(checkpointer=checkpointer)
             config = build_supervisor_config(outer_thread_id)
 
-            result_1 = await supervisor_graph.ainvoke(
+            result_0 = await supervisor_graph.ainvoke(
                 {"user_input": "a braking operational requirement, then a speed operational requirement",
                  "session_id": session.id},
                 config,
             )
+            # 2 tasks -> COMPLEX (Layer-1 rebuild Step 4) -> plan_review gates first.
+            assert result_0.get("__interrupt__")
+            assert result_0["__interrupt__"][0].value["pattern"] == "plan_review"
+            print("PLAN_REVIEW: paused for approval (2-task plan is complex)")
+
+            result_1 = await supervisor_graph.ainvoke(Command(resume={"action": "approve"}), config)
             assert result_1.get("__interrupt__")
             assert result_1["plan_state"]["tasks"][0]["status"] == "in_progress"
             print("TASK 1: paused at layer-3 review")
@@ -347,9 +353,15 @@ async def test_dependency_order_respected():
             supervisor_graph = build_supervisor_graph(checkpointer=checkpointer)
             config = build_supervisor_config(outer_thread_id)
 
-            result_1 = await supervisor_graph.ainvoke(
+            result_0 = await supervisor_graph.ainvoke(
                 {"user_input": "generate a braking requirement, then its diagram", "session_id": session.id}, config
             )
+            # 2 tasks -> COMPLEX (Layer-1 rebuild Step 4) -> plan_review gates first.
+            assert result_0.get("__interrupt__")
+            assert result_0["__interrupt__"][0].value["pattern"] == "plan_review"
+            print("PLAN_REVIEW: paused for approval (2-task plan is complex)")
+
+            result_1 = await supervisor_graph.ainvoke(Command(resume={"action": "approve"}), config)
             assert result_1.get("__interrupt__")
             task_1_active = result_1["plan_state"]["tasks"][0]
             task_2 = result_1["plan_state"]["tasks"][1]
@@ -512,9 +524,16 @@ async def test_guard_stops_mid_execution():
                 supervisor_graph = build_supervisor_graph(checkpointer=checkpointer)
                 config = build_supervisor_config(outer_thread_id)
 
-                result_1 = await supervisor_graph.ainvoke(
+                result_0 = await supervisor_graph.ainvoke(
                     {"user_input": "a braking requirement, then a speed requirement", "session_id": session.id}, config
                 )
+                # 2 tasks -> COMPLEX -> plan_review gates first (doesn't consume a
+                # top_level_supervisor visit -- the guard's visit count is unaffected).
+                assert result_0.get("__interrupt__")
+                assert result_0["__interrupt__"][0].value["pattern"] == "plan_review"
+                print("PLAN_REVIEW: paused for approval (2-task plan is complex)")
+
+                result_1 = await supervisor_graph.ainvoke(Command(resume={"action": "approve"}), config)
                 assert result_1.get("__interrupt__"), "task 1 (within max_visits) should still reach layer-3 review"
                 print("visit 1-2 (<= max_visits=2): task 1 reached layer-3 review, as expected")
 
@@ -581,11 +600,16 @@ async def test_distinct_thread_ids_per_task():
             supervisor_graph = build_supervisor_graph(checkpointer=checkpointer)
             config = build_supervisor_config(outer_thread_id)
 
-            result_1 = await supervisor_graph.ainvoke(
+            result_0 = await supervisor_graph.ainvoke(
                 {"user_input": "a braking operational requirement, then a speed operational requirement",
                  "session_id": session.id},
                 config,
             )
+            # 2 tasks -> COMPLEX -> plan_review gates first.
+            assert result_0.get("__interrupt__")
+            assert result_0["__interrupt__"][0].value["pattern"] == "plan_review"
+
+            result_1 = await supervisor_graph.ainvoke(Command(resume={"action": "approve"}), config)
             result_2 = await supervisor_graph.ainvoke(Command(resume={"action": "approve"}), config)
             result_3 = await supervisor_graph.ainvoke(Command(resume={"action": "approve"}), config)
 

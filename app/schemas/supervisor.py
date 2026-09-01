@@ -131,3 +131,35 @@ class PlanDecision(BaseModel):
     clarifying_message: str | None = Field(
         default=None, description="Set only when sufficient=False: what's missing, asked to the user."
     )
+
+
+class PlanReviewTaskSummary(BaseModel):
+    """One task as shown to the user in the plan_review payload -- id + the fields
+    that matter for a human to judge the plan (description, intent, level,
+    dependency). Deliberately omits status/result_ref: nothing has executed yet.
+    """
+
+    id: str
+    description: str
+    intent: Literal["generate_requirement", "generate_diagram"]
+    level: RequirementLevel | None = None
+    depends_on: str | None = None
+
+
+class PlanReviewPattern(BaseModel):
+    """Fixed-structure plan-level HITL payload (Layer-1 rebuild, Step 4): the frontend
+    renders the ORDERED TODO list for the user to approve, edit, or cancel BEFORE any
+    execution begins. Consistent in spirit with Layer-2's confirmation-pattern style
+    (structured/code-driven; only the accompanying `question` is naturally-phrased),
+    but scoped to Layer-1's own plan-level concern -- distinct from Layer-2's
+    artifact-targeting confirms and Layer-3's per-artifact requirement_review.
+
+    Resume contract: {"action": "approve"} | {"action": "cancel"} |
+    {"action": "modify", "tasks": [{description, intent, level?, depends_on_task_number?}, ...]}
+    -- the same shape plan_node's own decomposition produces (PlannedTask), so an edited
+    plan is re-validated through the identical deterministic construction logic.
+    """
+
+    pattern: Literal["plan_review"] = "plan_review"
+    question: str
+    tasks: list[PlanReviewTaskSummary]

@@ -6,6 +6,7 @@ from app.config import get_settings
 from harness.guards import checkpoint_durability
 from supervisor.plan import plan_node
 from supervisor.plan_ops import in_progress_task, with_task_status
+from supervisor.plan_review import plan_review, route_from_plan_node, route_from_plan_review
 from supervisor.router import route_from_top_supervisor, top_level_supervisor
 from supervisor.state import SupervisorState
 
@@ -105,17 +106,21 @@ def build_supervisor_graph(checkpointer=None):
     Step 2: needs_execution routes through plan_node, which decomposes the request into
     an ordered TODO list (plan_state) and hands control back to the hub; simple_response
     and unclear are unchanged and never reach plan_node.
-    Step 3 (this build): the hub becomes the EXECUTION LOOP driver too -- with a
-    plan_state present, it picks the next eligible pending task (dependency order
-    respected) and delegates it to sysml_middle_node; sysml_middle_node records the
-    task's light reference and hands control back, looping WITHOUT stopping until every
-    task is done. Step 5 adds memory_optimization / finalize_turn as a further new
-    conditional target off this same shape, without restructuring it.
+    Step 3: the hub becomes the EXECUTION LOOP driver too -- with a plan_state
+    present, it picks the next eligible pending task (dependency order respected) and
+    delegates it to sysml_middle_node; sysml_middle_node records the task's light
+    reference and hands control back, looping WITHOUT stopping until every task is done.
+    Step 4 (this build): a COMPLEX plan (more than one task) is routed through
+    plan_review for HITL approval/editing/cancellation BEFORE execution starts; a
+    SIMPLE (single-task) plan skips it entirely, straight to execution, no friction.
+    Step 5 adds memory_optimization / finalize_turn as a further new conditional target
+    off this same shape, without restructuring it.
     """
     builder = StateGraph(SupervisorState)
 
     builder.add_node("top_level_supervisor", top_level_supervisor)
     builder.add_node("plan_node", plan_node)
+    builder.add_node("plan_review", plan_review)
     builder.add_node("sysml_middle_node", sysml_middle_node)
 
     builder.add_edge(START, "top_level_supervisor")
@@ -130,7 +135,24 @@ def build_supervisor_graph(checkpointer=None):
         },
     )
 
-    builder.add_edge("plan_node", "top_level_supervisor")
+    builder.add_conditional_edges(
+        "plan_node",
+        route_from_plan_node,
+        {
+            "plan_review": "plan_review",
+            "top_level_supervisor": "top_level_supervisor",
+        },
+    )
+
+    builder.add_conditional_edges(
+        "plan_review",
+        route_from_plan_review,
+        {
+            "top_level_supervisor": "top_level_supervisor",
+            END: END,
+        },
+    )
+
     builder.add_edge("sysml_middle_node", "top_level_supervisor")
 
     return builder.compile(checkpointer=checkpointer)

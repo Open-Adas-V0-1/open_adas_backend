@@ -1,8 +1,9 @@
 from langgraph.types import interrupt
 
-from app.schemas.supervisor import PlanDecision, PlanState, TodoItem, TodoStatus
+from app.schemas.supervisor import PlanDecision, PlanState
 from llm.factory import get_llm
 from llm.prompts import load_prompt
+from supervisor.plan_ops import build_todo_items
 from supervisor.state import SupervisorState
 
 _FALLBACK_CLARIFY = "Could you give me a bit more detail so I can plan this out?"
@@ -47,18 +48,7 @@ async def plan_node(state: SupervisorState) -> dict:
             "user_input": new_user_input or state.get("user_input"),
         }
 
-    tasks = [
-        TodoItem(
-            id=f"task-{i}",
-            description=t.description,
-            intent=t.intent,
-            level=t.level,
-            depends_on=f"task-{t.depends_on_task_number}" if t.depends_on_task_number else None,
-            status=TodoStatus.pending,
-            result_ref=None,
-        )
-        for i, t in enumerate(decision.tasks, start=1)
-    ]
+    tasks = build_todo_items(decision.tasks)
     plan_state = PlanState(tasks=tasks, original_request=state.get("user_input", ""))
 
     return {

@@ -51,6 +51,9 @@ async def top_level_supervisor(state: SupervisorState) -> dict:
         if task is None:
             # No pending task left (and none in_progress, since sysml_middle_node
             # always marks its task done before returning) -> execution complete.
+            # plan_state is left populated (all tasks "done") so the final response
+            # can show what was accomplished this turn -- unlike plan_review's cancel
+            # path, which clears it (nothing was done, nothing to show).
             return {
                 "supervisor_visits": visits,
                 "done": True,
