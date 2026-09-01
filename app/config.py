@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     memory_opt_threshold_ratio: float = 0.8
     memory_short_term_budget_tokens: int = 8000
 
+    # ── JWT authentication (T6b Step 1) ──
+    jwt_secret_key: str
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 60
+
     @property
     def database_url(self) -> str:
         return (

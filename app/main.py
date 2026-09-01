@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from app.api.routes.auth import router as auth_router
 from app.config import get_settings
 from data.db import engine
 from storage.s3 import S3StorageBackend
@@ -19,6 +20,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
+app.include_router(auth_router)
 
 
 @app.get("/health")
