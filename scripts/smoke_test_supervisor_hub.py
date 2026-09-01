@@ -31,18 +31,19 @@ from supervisor.graph import build_supervisor_config, build_supervisor_graph  # 
 
 
 class FakeStructuredLLM:
-    def __init__(self, decision):
-        self.decision = decision
+    def __init__(self, decisions):
+        self._decisions = decisions if isinstance(decisions, list) else [decisions]
         self.calls = 0
 
     async def ainvoke(self, prompt):
+        decision = self._decisions[min(self.calls, len(self._decisions) - 1)]
         self.calls += 1
-        return self.decision
+        return decision
 
 
 class FakeStructuredWrapperLLM:
-    def __init__(self, decision):
-        self._structured = FakeStructuredLLM(decision)
+    def __init__(self, decisions):
+        self._structured = FakeStructuredLLM(decisions)
 
     def with_structured_output(self, schema):
         return self._structured
@@ -124,20 +125,23 @@ async def test_simple_response():
 
 # ---------------------------------------------------------------------------
 # Scenario 2: needs_execution -- a clear work request is classified as needing real
-# work, NOT answered as small talk. Only a placeholder response for now (Steps 2-3
-# build real dispatch).
+# work, NOT answered as small talk.
 # ---------------------------------------------------------------------------
 async def test_needs_execution_routes_onward():
     print("\n--- Scenario 2: needs_execution -- classified as work, NOT answered as small talk ---")
-    # As of the Layer-1 rebuild Step 2, needs_execution routes to plan_node instead of
-    # returning a Step-1 placeholder -- plan_node's own coverage lives in
-    # scripts/smoke_test_supervisor_plan.py. This scenario stays focused on Step 1's
-    # actual contract: the hub classification itself, proven by asserting it is
-    # correctly identified as work (not small talk) BEFORE anything downstream runs.
+    # As of the Layer-1 rebuild Step 3, needs_execution routes ALL THE WAY through
+    # plan_node -> sysml_middle_node -> layer-2/3 -- plan_node's own decomposition
+    # coverage lives in scripts/smoke_test_supervisor_plan.py, and the execution loop's
+    # own coverage lives in scripts/smoke_test_supervisor_execution.py. This scenario
+    # stays focused on Step 1's actual contract (the hub classification), but must now
+    # stub the full downstream pipeline for the turn to complete without hitting a real
+    # LLM call.
     user, session = await setup_user_project_session("exec")
 
+    from app.schemas.sysml import Intent, IntentDecision, MiddleDecision
     from app.schemas.supervisor import PlanDecision, PlannedTask
     from data.models import RequirementLevel
+    from langgraph.types import Command
 
     top_llm = FakeStructuredWrapperLLM(
         HubDecision(classification=HubClassification.needs_execution, response=None)
@@ -149,6 +153,30 @@ async def test_needs_execution_routes_onward():
                                 intent="generate_requirement", level=RequirementLevel.operational)],
         )
     )
+    middle_llm = FakeStructuredWrapperLLM([
+        MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
+        MiddleDecision(has_request=False, message="nothing further"),
+    ])
+    layer3_supervisor_llm = FakeStructuredWrapperLLM(IntentDecision(intent=Intent.generate_requirement))
+
+    class FakeMessage:
+        def __init__(self, content):
+            self.content = content
+
+    class FakeSequenceLLM:
+        def __init__(self, drafts):
+            self._drafts = drafts
+            self.calls = 0
+
+        async def ainvoke(self, prompt):
+            draft = self._drafts[min(self.calls, len(self._drafts) - 1)]
+            self.calls += 1
+            return FakeMessage(draft)
+
+    plan_step_llm = FakeSequenceLLM(["plan"])
+    generate_llm = FakeSequenceLLM([
+        "package Ops { requirement def OpReq { doc /* op */ subject s : ScalarValues::Boolean; require constraint { true } } }"
+    ])
 
     def fake_top_get_llm(node_name=None):
         if node_name == "top_level_supervisor":
@@ -160,27 +188,47 @@ async def test_needs_execution_routes_onward():
             return plan_llm
         raise AssertionError(f"unexpected node_name in supervisor.plan: {node_name}")
 
+    def fake_middle_get_llm(node_name=None):
+        if node_name == "sysml_middle_supervisor":
+            return middle_llm
+        raise AssertionError(f"unexpected node_name in agents.sysml.middle_nodes: {node_name}")
+
+    def fake_layer3_get_llm(node_name=None):
+        if node_name == "sysml_supervisor":
+            return layer3_supervisor_llm
+        if node_name == "sysml_plan":
+            return plan_step_llm
+        if node_name == "sysml_generate":
+            return generate_llm
+        raise AssertionError(f"unexpected node_name in agents.sysml.nodes: {node_name}")
+
     outer_thread_id = f"outer-{uuid.uuid4()}"
 
     async with build_production_checkpointer() as checkpointer:
         with patch("supervisor.router.get_llm", side_effect=fake_top_get_llm), \
-             patch("supervisor.plan.get_llm", side_effect=fake_plan_get_llm):
+             patch("supervisor.plan.get_llm", side_effect=fake_plan_get_llm), \
+             patch("agents.sysml.middle_nodes.get_llm", side_effect=fake_middle_get_llm), \
+             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm), \
+             patch("agents.sysml.nodes.validate", return_value=[]):
             supervisor_graph = build_supervisor_graph(checkpointer=checkpointer)
             config = build_supervisor_config(outer_thread_id)
 
-            result = await supervisor_graph.ainvoke(
+            result_1 = await supervisor_graph.ainvoke(
                 {"user_input": "generate an operational requirement for braking", "session_id": session.id},
                 config,
             )
+            assert result_1.get("__interrupt__"), "expected downstream layer-3 review, proving real work engaged"
+            assert result_1.get("classification") == "needs_execution"
+            assert result_1.get("response") is None, "must NOT be answered as small talk"
+            print(f"input='generate an operational requirement for braking' -> classification="
+                  f"{result_1.get('classification')!r} response={result_1.get('response')!r}")
+            print("assert OK: NOT answered as small talk -- correctly routed onward, all the way to layer-3 review")
 
-    assert not result.get("__interrupt__")
-    assert result.get("classification") == "needs_execution"
-    assert result.get("response") is None, "must NOT be answered as small talk"
-    assert result.get("plan_state") is not None, "expected needs_execution to route onward (plan_node), not dead-end"
-    assert result.get("done") is True
-    print(f"input='generate an operational requirement for braking' -> classification="
-          f"{result.get('classification')!r} response={result.get('response')!r}")
-    print("assert OK: NOT answered as small talk -- correctly routed onward for real work")
+            result_2 = await supervisor_graph.ainvoke(Command(resume={"action": "approve"}), config)
+
+    assert not result_2.get("__interrupt__")
+    assert result_2.get("done") is True
+    assert result_2["plan_state"]["tasks"][0]["status"] == "done"
 
     await clear_checkpoints()
     await cleanup_user(user)
