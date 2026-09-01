@@ -1,14 +1,30 @@
+import asyncio
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+# AsyncPostgresSaver (the production LangGraph checkpointer, attached below in
+# lifespan) uses psycopg's async mode, which requires SelectorEventLoop -- uvicorn's
+# default loop on Windows is ProactorEventLoop, which psycopg explicitly refuses to
+# run under. Every smoke test in this project already sets this for the same reason
+# (not a new constraint here, just the first time the app process itself needs it,
+# since Steps 1-2 never touched the checkpointer). Must happen before uvicorn creates
+# its event loop, i.e. at import time -- app.main is always imported before the
+# server starts serving, regardless of how uvicorn is launched.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from app.api.routes.auth import router as auth_router
+from app.api.routes.chat import router as chat_router
 from app.api.routes.projects import router as projects_router
 from app.config import get_settings
 from data.db import engine
+from harness.checkpointer import build_production_checkpointer
 from storage.s3 import S3StorageBackend
+from supervisor.graph import build_supervisor_graph
 
 settings = get_settings()
 storage = S3StorageBackend(settings)
@@ -17,12 +33,19 @@ storage = S3StorageBackend(settings)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await storage.ensure_bucket()
-    yield
+    # The ONE production checkpointer + the ONE compiled Layer-1 graph, built once
+    # for the app's whole lifetime (Layers 2/3 inherit this same checkpointer,
+    # exactly as every existing smoke test relies on) -- never rebuilt per request.
+    async with build_production_checkpointer() as checkpointer:
+        app.state.checkpointer = checkpointer
+        app.state.supervisor_graph = build_supervisor_graph(checkpointer=checkpointer)
+        yield
 
 
 app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(projects_router)
+app.include_router(chat_router)
 
 
 @app.get("/health")

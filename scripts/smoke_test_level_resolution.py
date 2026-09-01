@@ -54,6 +54,12 @@ class FakeStructuredLLM:
     async def ainvoke(self, prompt):
         return self.decision
 
+    async def astream(self, prompt):
+        yield await self.ainvoke(prompt)
+
+    def with_config(self, **kwargs):
+        return self
+
 
 class FakeStructuredWrapperLLM:
     def __init__(self, decision):

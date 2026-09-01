@@ -44,6 +44,12 @@ class FakeStructuredLLM:
         self.calls += 1
         return decision
 
+    async def astream(self, prompt):
+        yield await self.ainvoke(prompt)
+
+    def with_config(self, **kwargs):
+        return self
+
 
 class FakeStructuredWrapperLLM:
     """Mimics get_llm(...).with_structured_output(schema) -> object with .ainvoke()."""

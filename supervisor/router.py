@@ -8,6 +8,7 @@ from llm.prompts import load_prompt
 from supervisor.memory_ops import is_context_near_full
 from supervisor.plan_ops import in_progress_task, next_pending_task, with_task_status
 from supervisor.state import SupervisorState
+from supervisor.streaming_tags import TOKEN_STREAM_TAG
 
 _FALLBACK_SIMPLE_RESPONSE = "Hi! How can I help with your SysML v2 requirements or diagrams today?"
 _FALLBACK_CLARIFY = "Could you clarify what you'd like me to do?"
@@ -65,9 +66,30 @@ async def top_level_supervisor(state: SupervisorState) -> dict:
             "plan_state": with_task_status(plan_state, task["id"], "in_progress"),
         }
 
-    llm = get_llm("top_level_supervisor").with_structured_output(HubDecision)
+    # Tagged + streamed (T6b Step 3a), NOT for a different outcome -- .with_config's
+    # tag is the ONLY thing an external astream_events() caller (the chat SSE route)
+    # can use to attribute a token to THIS specific call, among every other LLM call
+    # the graph makes. Streaming (astream, not ainvoke) is what makes token-level
+    # events exist at all; the structured-output parser re-validates into a fresh
+    # HubDecision on every chunk (LangChain's own incremental json_mode parsing), so
+    # `decision` ends up EXACTLY the object .ainvoke() would have produced -- same
+    # prompt, same classification/response, same fallback logic below, unchanged.
+    llm = (
+        get_llm("top_level_supervisor")
+        .with_structured_output(HubDecision)
+        .with_config(tags=[TOKEN_STREAM_TAG])
+    )
     prompt = load_prompt("supervisor/general_answer.md", user_input=state.get("user_input", ""))
-    decision: HubDecision = await llm.ainvoke(prompt)
+    decision: HubDecision | None = None
+    async for chunk in llm.astream(prompt):
+        decision = chunk
+    if decision is None:
+        # Observed, transient real-gateway flake (empty stream, no error raised) --
+        # same class of unreliability already handled by callers' retry wrappers for
+        # this backend's structured-output calls (see llm/factory.py's json_mode
+        # fix). A clear, distinct exception type so a caller can retry the whole
+        # node call, exactly as it would for any other transient LLM failure.
+        raise RuntimeError("hub decision stream produced no chunks")
 
     classification = decision.classification.value if decision.classification else None
 

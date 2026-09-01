@@ -119,10 +119,15 @@ async def ainvoke_resilient(graph, arg, config, attempts=4):
     for attempt in range(1, attempts + 1):
         try:
             return await graph.ainvoke(arg, config)
-        except OutputParserException as exc:
+        except (OutputParserException, RuntimeError) as exc:
+            # RuntimeError: the SAME gateway flakiness, a different failure shape --
+            # top_level_supervisor's streamed structured-output call (T6b Step 3a)
+            # occasionally yields an EMPTY stream (no chunks, no exception from the
+            # provider) instead of a parse error. supervisor/router.py raises this
+            # exact RuntimeError for that case so it's retryable here the same way.
             last_exc = exc
-            print(f"    [gateway flake, attempt {attempt}/{attempts}] structured-output parse "
-                  f"failed, retrying: {str(exc)[:150]}")
+            print(f"    [gateway flake, attempt {attempt}/{attempts}] {type(exc).__name__}, "
+                  f"retrying: {str(exc)[:150]}")
             await asyncio.sleep(1.5 * attempt)
     raise last_exc
 

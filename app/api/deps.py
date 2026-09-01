@@ -13,7 +13,7 @@ querying ProjectRepo/SessionRepo directly and checking ownership themselves.
 """
 import uuid
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.middleware.auth import get_current_user
@@ -50,3 +50,11 @@ async def get_owned_session(
     if owning_project is None:
         raise _NOT_FOUND
     return session_row
+
+
+def get_supervisor_graph(request: Request):
+    """The ONE compiled Layer-1 graph, built once at app startup (see app/main.py's
+    lifespan) with the ONE production checkpointer attached -- Layers 2/3 inherit it
+    exactly as every existing smoke test relies on. Never rebuilt per request.
+    """
+    return request.app.state.supervisor_graph
