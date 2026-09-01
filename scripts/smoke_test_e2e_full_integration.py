@@ -29,7 +29,6 @@ import asyncio
 import os
 import sys
 import uuid
-from contextlib import contextmanager
 from unittest.mock import patch
 
 if sys.platform == "win32":
@@ -72,38 +71,6 @@ async def fake_validate(text_):
 
 async def fake_to_mermaid(text_):
     return "graph TD; A-->B;"
-
-
-@contextmanager
-def env_override(**kwargs):
-    """Scoped env override + get_settings() cache clear, restoring the PRIOR value
-    (not just unsetting) on exit -- safe to nest / use across scenarios that might
-    each want their own override of the same key.
-
-    Used here for SYSML_MIDDLE_MAX_VISITS: with a REAL model, Layer-2's
-    middle_supervisor re-evaluates the SAME static task text on every internal loop
-    visit (its established, already-tested contract -- unchanged by the Layer-1
-    rebuild). A real model doesn't always recognize "the active_requirements list now
-    shows this was just fulfilled" as a stop signal the way every prior STUBBED test
-    explicitly scripted it to (has_request=False on the second decision) -- so it can
-    re-dispatch the same atomic task again. Layer-2's own guard (SYSML_MIDDLE_MAX_VISITS)
-    is exactly what's designed to bound this, fail-open, no crash (see Scenario 5b) --
-    this override just keeps that bound tight for these scenarios' cost/runtime, real
-    model calls being what they are.
-    """
-    old = {k: os.environ.get(k) for k in kwargs}
-    for k, v in kwargs.items():
-        os.environ[k] = str(v)
-    get_settings.cache_clear()
-    try:
-        yield
-    finally:
-        for k, v in old.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-        get_settings.cache_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +151,10 @@ def _resume_for(payload: dict) -> dict:
         return {"action": "confirm"}
     if payload.get("type") == "requirement_review":
         return {"action": "approve"}
+    if payload.get("type") == "plan_clarify":
+        # plan_node's own insufficiency interrupt (Layer-1, Step 2) -- distinct resume
+        # contract: {"user_input": <clarified text>}, not {"action": ...}.
+        return {"user_input": "Generate a SysML v2 use case diagram representing an existing requirement in this session."}
     return {"action": "approve"}
 
 
@@ -257,8 +228,7 @@ async def scenario_2_single_task_full_depth(checkpointer):
     print("=" * 78)
     user, session = await setup_user_project_session("single")
 
-    with env_override(SYSML_MIDDLE_MAX_VISITS=2), \
-         patch("agents.sysml.nodes.validate", side_effect=fake_validate), \
+    with patch("agents.sysml.nodes.validate", side_effect=fake_validate), \
          patch("agents.sysml.nodes.to_mermaid", side_effect=fake_to_mermaid):
         supervisor_graph = build_supervisor_graph(checkpointer=checkpointer)
         outer_thread_id = f"outer-{uuid.uuid4()}"
@@ -301,17 +271,14 @@ async def scenario_2_single_task_full_depth(checkpointer):
 
     async with async_session_factory() as db:
         rows = await RequirementRepo.list_by_session(db, session_id=session.id)
-        matching = [r for r in rows if str(r.id) == task["result_ref"]["artifact_id"]]
-        assert len(matching) == 1, f"expected the task's OWN light ref to be finalized, found rows={rows}"
-        assert matching[0].level == RequirementLevel.operational
-        print(f"  assert OK: artifact finalized in Postgres, id={matching[0].id}, level=operational, "
-              f"keyed by thread(session)={session.id}")
-        if len(rows) > 1:
-            print(f"  NOTE: {len(rows)} requirement(s) total finalized in this thread, not just 1 -- "
-                  f"Layer-2's middle_supervisor (real model) re-evaluated the SAME atomic task text and "
-                  f"judged it still actionable more than once before its own guard/termination kicked in. "
-                  f"Not a correctness bug (every artifact is still individually valid, approval-gated, "
-                  f"and the guard bounds it) -- see the written summary for this finding.")
+        # Fixed (agents/sysml/middle_nodes.py's task_locked/task_target completion
+        # condition): Layer-2 no longer re-judges an already-satisfied single TODO task
+        # as still actionable -- exactly one requirement, no duplication.
+        assert len(rows) == 1, f"expected EXACTLY 1 requirement, found {len(rows)}: {[str(r.id) for r in rows]}"
+        assert rows[0].level == RequirementLevel.operational
+        assert str(rows[0].id) == task["result_ref"]["artifact_id"]
+        print(f"  assert OK: exactly 1 requirement finalized in Postgres, id={rows[0].id}, "
+              f"level=operational, keyed by thread(session)={session.id}")
 
     await cleanup_user(user)
     print("SCENARIO 2 PASSED")
@@ -326,8 +293,7 @@ async def scenario_3_multi_task_ordered(checkpointer):
     print("=" * 78)
     user, session = await setup_user_project_session("multi")
 
-    with env_override(SYSML_MIDDLE_MAX_VISITS=2), \
-         patch("agents.sysml.nodes.validate", side_effect=fake_validate), \
+    with patch("agents.sysml.nodes.validate", side_effect=fake_validate), \
          patch("agents.sysml.nodes.to_mermaid", side_effect=fake_to_mermaid):
         supervisor_graph = build_supervisor_graph(checkpointer=checkpointer)
         outer_thread_id = f"outer-{uuid.uuid4()}"
@@ -366,6 +332,9 @@ async def scenario_3_multi_task_ordered(checkpointer):
         assert "plan_review" in hops, "a >1-task plan must be gated by plan_review (complex-plan approval)"
         print("  assert OK: complex (>1 task) plan was gated by plan_review before any execution")
 
+    expected_requirement_tasks = sum(1 for t in tasks if t["intent"] == "generate_requirement")
+    expected_diagram_tasks = sum(1 for t in tasks if t["intent"] == "generate_diagram")
+
     async with async_session_factory() as db:
         rows = await RequirementRepo.list_by_session(db, session_id=session.id)
         by_level = {r.level.value: r for r in rows}
@@ -373,15 +342,25 @@ async def scenario_3_multi_task_ordered(checkpointer):
         for r in rows:
             diagrams.extend(await DiagramRepo.get_by_requirement(db, requirement_id=r.id, session_id=session.id))
 
-    print(f"  requirement levels finalized in this thread: {sorted(by_level.keys())}")
+    print(f"  requirement levels finalized in this thread: {sorted(by_level.keys())} (count={len(rows)})")
     print(f"  diagrams finalized, linked to a requirement in this thread: {len(diagrams)}")
+    # Fixed (agents/sysml/middle_nodes.py's task_locked/task_target completion
+    # condition): each distinct TODO task produces its artifact EXACTLY once -- no
+    # duplication, regardless of how many tasks the turn decomposed into.
+    assert len(rows) == expected_requirement_tasks, (
+        f"expected exactly {expected_requirement_tasks} requirement(s) (1 per requirement task), "
+        f"found {len(rows)}"
+    )
+    assert len(diagrams) == expected_diagram_tasks, (
+        f"expected exactly {expected_diagram_tasks} diagram(s) (1 per diagram task), found {len(diagrams)}"
+    )
     assert "operational" in by_level, "expected the operational requirement to have been finalized"
     if "functional" in by_level:
         print("  assert OK: functional requirement finalized -- forward level progression "
               "(operational -> functional) occurred in this thread")
-    if diagrams:
-        print(f"  assert OK: diagram(s) finalized and linked to a requirement in this thread "
-              f"(id={diagrams[0].id})")
+    print(f"  assert OK: exactly {len(rows)} requirement(s) + {len(diagrams)} diagram(s) -- "
+          f"matches the {expected_requirement_tasks + expected_diagram_tasks} artifact-producing "
+          f"task(s) exactly, no duplication")
 
     for t in tasks:
         assert t.get("result_ref") is not None, f"expected a light ref recorded for task {t['id']}"
@@ -412,8 +391,7 @@ async def scenario_4_stacked_interrupts(checkpointer):
         await db.commit()
     print(f"  pre-seeded 2 active requirements: {req_a.id}, {req_b.id} -- ambiguous target for a diagram")
 
-    with env_override(SYSML_MIDDLE_MAX_VISITS=2), \
-         patch("agents.sysml.nodes.validate", side_effect=fake_validate), \
+    with patch("agents.sysml.nodes.validate", side_effect=fake_validate), \
          patch("agents.sysml.nodes.to_mermaid", side_effect=fake_to_mermaid):
         supervisor_graph = build_supervisor_graph(checkpointer=checkpointer)
         outer_thread_id = f"outer-{uuid.uuid4()}"
@@ -445,8 +423,17 @@ async def scenario_4_stacked_interrupts(checkpointer):
     async with async_session_factory() as db:
         diagrams_a = await DiagramRepo.get_by_requirement(db, requirement_id=req_a.id, session_id=session.id)
         diagrams_b = await DiagramRepo.get_by_requirement(db, requirement_id=req_b.id, session_id=session.id)
-    assert diagrams_a or diagrams_b, "expected the diagram to be linked to (at least) one of the two seeded requirements"
-    print(f"  assert OK: diagram persisted, linked to req A={len(diagrams_a)} req B={len(diagrams_b)}")
+    # Fixed (task_locked/task_target): exactly ONE diagram for this ONE task -- never
+    # duplicated, regardless of which of the two candidates real classification/
+    # selection ultimately linked it to (that's a separate, real-model-driven concern,
+    # not what this fix is about).
+    all_diagram_ids = {d.id for d in diagrams_a} | {d.id for d in diagrams_b}
+    assert len(all_diagram_ids) == 1, (
+        f"expected EXACTLY 1 diagram total for this ONE task, found {len(all_diagram_ids)}: "
+        f"req_a={len(diagrams_a)} req_b={len(diagrams_b)}"
+    )
+    print(f"  assert OK: exactly 1 diagram persisted (id={next(iter(all_diagram_ids))}), no duplication -- "
+          f"linked to req_a={len(diagrams_a)} req_b={len(diagrams_b)}")
 
     await cleanup_user(user)
     print("SCENARIO 4 PASSED")

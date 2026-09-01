@@ -174,7 +174,6 @@ async def test_single_task_three_level_bubble():
     ))
     middle_llm = FakeStructuredWrapperLLM([
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
     ])
     layer3_supervisor_llm = FakeStructuredWrapperLLM(IntentDecision(intent=Intent.generate_requirement))
     plan_step_llm = FakeSequenceLLM(["plan"])
@@ -248,9 +247,7 @@ async def test_multi_task_no_stop_between():
     ))
     middle_llm = FakeStructuredWrapperLLM([
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
     ])
     layer3_supervisor_llm = FakeStructuredWrapperLLM([
         IntentDecision(intent=Intent.generate_requirement),
@@ -333,9 +330,7 @@ async def test_dependency_order_respected():
     ))
     middle_llm = FakeStructuredWrapperLLM([
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_diagram, diagram_type=DiagramType.use_case),
-        MiddleDecision(has_request=False, message="nothing further"),
     ])
     layer3_supervisor_llm = FakeStructuredWrapperLLM([
         IntentDecision(intent=Intent.generate_requirement),
@@ -418,7 +413,6 @@ async def test_stacked_interrupts_across_layers():
     ))
     middle_llm = FakeStructuredWrapperLLM([
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_diagram, diagram_type=DiagramType.use_case),
-        MiddleDecision(has_request=False, message="nothing further"),
     ])
     confirm_question_llm = FakeSequenceLLM(["Which requirements should this diagram represent?"])
     layer3_supervisor_llm = FakeStructuredWrapperLLM(
@@ -500,7 +494,6 @@ async def test_guard_stops_mid_execution():
     ))
     middle_llm = FakeStructuredWrapperLLM([
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
     ])
     layer3_supervisor_llm = FakeStructuredWrapperLLM(IntentDecision(intent=Intent.generate_requirement))
     plan_step_llm = FakeSequenceLLM(["plan"])
@@ -579,9 +572,7 @@ async def test_distinct_thread_ids_per_task():
     ))
     middle_llm = FakeStructuredWrapperLLM([
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
     ])
     layer3_supervisor_llm = FakeStructuredWrapperLLM([
         IntentDecision(intent=Intent.generate_requirement),

@@ -155,7 +155,6 @@ async def test_needs_execution_routes_onward():
     )
     middle_llm = FakeStructuredWrapperLLM([
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
     ])
     layer3_supervisor_llm = FakeStructuredWrapperLLM(IntentDecision(intent=Intent.generate_requirement))
 

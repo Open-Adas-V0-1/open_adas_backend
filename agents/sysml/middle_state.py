@@ -12,6 +12,23 @@ class MiddleState(TypedDict, total=False):
     diagram_type: str | None
     clarifying_message: str | None
 
+    # ONE delegated task -> ONE completion target (fix for real-model re-dispatch of an
+    # already-satisfied task): task_locked/task_target are set ONCE, the first time
+    # middle_supervisor makes a real dispatch-worthy judgement, and fixed until an
+    # explicit user modification. target_fulfilled is set by sysml_processing after
+    # each processing, deterministically, from the already-resolved ProcessingInput --
+    # no LLM re-judgement. See agents/sysml/middle_nodes.py's _lock_target /
+    # _target_fulfilled / middle_supervisor's completion-condition branch.
+    task_locked: bool
+    task_target: dict | None  # {"intent", "diagram_type", "requested_level"}
+    target_fulfilled: bool | None
+    # Set by Layer-1's sysml_middle_node (supervisor/graph.py) on every dispatch --
+    # marks this invocation as delegating exactly ONE atomic TODO task, which is what
+    # enables the task_locked/task_target completion condition above. Unset (None) when
+    # the middle graph is driven directly/standalone (its own established contract: a
+    # single free-form message may legitimately describe several distinct asks).
+    single_task_dispatch: bool | None
+
     # the requirement this processing concerns, if any. Resolved either directly by
     # middle_supervisor (named or sole active requirement) or via user_confirm_inputs
     # when genuinely ambiguous.

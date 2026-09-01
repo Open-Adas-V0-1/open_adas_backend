@@ -113,7 +113,6 @@ def downstream_ctxs():
     """
     middle_llm = FakeStructuredWrapperLLM([
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
     ])
     layer3_supervisor_llm = FakeStructuredWrapperLLM(IntentDecision(intent=Intent.generate_requirement))
     plan_step_llm = FakeSequenceLLM(["plan"])

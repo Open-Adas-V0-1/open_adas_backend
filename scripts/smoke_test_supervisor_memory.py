@@ -328,7 +328,6 @@ async def test_steps_1_to_4_still_complete_through_finalize():
     ))
     middle_llm_s = FakeStructuredWrapperLLM([
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
     ])
     layer3_supervisor_llm_s = FakeStructuredWrapperLLM(IntentDecision(intent=Intent.generate_requirement))
     plan_step_llm_s = FakeSequenceLLM(["plan"])
@@ -367,9 +366,7 @@ async def test_steps_1_to_4_still_complete_through_finalize():
     ))
     middle_llm_m = FakeStructuredWrapperLLM([
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
     ])
     layer3_supervisor_llm_m = FakeStructuredWrapperLLM([
         IntentDecision(intent=Intent.generate_requirement),

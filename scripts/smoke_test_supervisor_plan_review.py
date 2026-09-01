@@ -180,9 +180,7 @@ async def test_complex_plan_approved():
     ))
     middle_decisions = [
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
     ]
     layer3_decisions = [IntentDecision(intent=Intent.generate_requirement)] * 2
 
@@ -252,7 +250,6 @@ async def test_simple_plan_skips_review():
     ))
     middle_decisions = [
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
     ]
     layer3_decisions = IntentDecision(intent=Intent.generate_requirement)
 
@@ -307,7 +304,6 @@ async def test_modified_plan_drops_task():
     # only ONE task will actually execute (the surviving, edited one).
     middle_decisions = [
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
     ]
     layer3_decisions = IntentDecision(intent=Intent.generate_requirement)
 
@@ -455,9 +451,7 @@ async def test_nested_interrupts_after_approval():
     ))
     middle_decisions = [
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_diagram, diagram_type=DiagramType.use_case),
-        MiddleDecision(has_request=False, message="nothing further"),
         MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational),
-        MiddleDecision(has_request=False, message="nothing further"),
     ]
     confirm_question_llm = FakeSequenceLLM(["Which requirements should this diagram represent?"])
     layer3_decisions = [

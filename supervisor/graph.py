@@ -78,6 +78,12 @@ async def sysml_middle_node(state: SupervisorState, config: RunnableConfig) -> d
         "user_input": middle_user_input,
         "session_id": session_id,
         "target_requirement_id": target_requirement_id,
+        # This ONE task is the entire ask for this middle graph invocation -- enables
+        # Layer-2's completion condition (agents/sysml/middle_nodes.py's task_locked/
+        # task_target), which stops middle_supervisor from re-judging an
+        # already-satisfied task as still actionable. Never set when Layer-2 is driven
+        # standalone (its own multi-ask-per-message contract is unaffected).
+        "single_task_dispatch": True,
     }
 
     # If Layer-2 (or Layer-3 beneath it) pauses here, this raises internally and

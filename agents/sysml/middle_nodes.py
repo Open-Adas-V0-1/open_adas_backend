@@ -52,13 +52,62 @@ _SOURCE_LEVEL_FOR = {"functional": "operational", "physical": "functional"}
 _sysml_processing_graph = build_sysml_graph()
 
 
+def _target_fulfilled(task_target: dict | None, processing_input: ProcessingInput) -> bool:
+    """Did the processing that JUST finished (sysml_processing, deterministic from the
+    already-resolved ProcessingInput -- no LLM call) satisfy the locked task's target,
+    or was it the resolve_level-triggered MISSING-PREREQUISITE step? Diagrams have no
+    prerequisite chain (never go through resolve_level) -- any finalized diagram
+    fulfills a diagram target. Requirements are fulfilled only once the level actually
+    processed matches the ORIGINALLY requested level; a lower level processed along the
+    way is, by construction, the bounded prerequisite step, not the target itself.
+    """
+    if not task_target:
+        return False
+    if processing_input.intent == "generate_diagram":
+        return task_target.get("intent") in (Intent.generate_diagram.value, Intent.modify_diagram.value)
+    target_level = task_target.get("requested_level") or "functional"
+    return processing_input.level.value == target_level
+
+
+def _lock_target(
+    state: MiddleState, resolved_intent: str | None, diagram_type: str | None, requested_level: str | None
+) -> dict:
+    """Fixes the delegated task's completion target the FIRST (and only) time
+    middle_supervisor makes a real, dispatch-worthy judgement call for it. Once locked,
+    middle_supervisor's own re-entries (after a processing loops back) stop
+    re-judging "is there still work?" against the same static task text -- they
+    deterministically check whether THIS target was fulfilled instead (see
+    _target_fulfilled / sysml_processing). Reset only by an explicit user
+    modification (user_confirm_inputs's "modified" branch) -- a genuinely new ask.
+
+    ONLY applies when single_task_dispatch is set -- i.e. this middle graph invocation
+    came from Layer-1's sysml_middle_node, which always delegates exactly ONE atomic
+    TODO task per invocation (see supervisor/graph.py). Layer-2's OWN standalone
+    contract -- a single free-form message legitimately describing SEVERAL distinct
+    asks (e.g. "define the operational need, then the function") -- is unaffected:
+    without this flag, middle_supervisor keeps its original, already-tested open-ended
+    re-judgement, exactly as scripts/smoke_test_layer2_integration.py exercises it.
+    """
+    if not state.get("single_task_dispatch"):
+        return {}
+    return {
+        "task_locked": True,
+        "task_target": {
+            "intent": resolved_intent,
+            "diagram_type": diagram_type,
+            "requested_level": requested_level,
+        },
+    }
+
+
 async def middle_supervisor(state: MiddleState, config: RunnableConfig) -> dict:
     visits = (state.get("supervisor_visits") or 0) + 1
     max_visits = get_settings().sysml_middle_max_visits
 
     # Loop guard: an unbounded middle_supervisor <-> sysml_processing loop would be a bug,
     # not a valid use case. Fail open to END rather than looping forever. Env-driven
-    # (SYSML_MIDDLE_MAX_VISITS) rather than hardcoded.
+    # (SYSML_MIDDLE_MAX_VISITS) rather than hardcoded. Kept as a BACKSTOP only -- the
+    # completion condition below is what actually stops the loop in the normal case.
     if visits > max_visits:
         return {
             "supervisor_visits": visits,
@@ -66,6 +115,36 @@ async def middle_supervisor(state: MiddleState, config: RunnableConfig) -> dict:
             "pending_pattern": None,
             "target_requirement_ids": None,
             "result": "stopped: max supervisor visits reached",
+        }
+
+    # Deterministic completion condition (no LLM call): once a task's target is locked,
+    # re-entering middle_supervisor (control only returns here after a processing loops
+    # back) means one processing just finished. Check whether THAT processing fulfilled
+    # the locked target -- never re-open the "is there still work?" judgement on the
+    # same static task text, which is what let a real model re-dispatch an
+    # already-satisfied request. If not yet fulfilled, the processing that just ran was
+    # the (bounded, purposeful) MISSING-PREREQUISITE step resolve_level triggered --
+    # resume deterministically toward the ORIGINAL locked target rather than asking the
+    # LLM again.
+    if state.get("task_locked"):
+        if state.get("target_fulfilled"):
+            return {
+                "supervisor_visits": visits,
+                "resolved_intent": None,
+                "pending_pattern": None,
+                "target_requirement_ids": None,
+                "result": "task_complete",
+            }
+        target = state["task_target"]
+        return {
+            "supervisor_visits": visits,
+            "resolved_intent": target["intent"],
+            "diagram_type": target.get("diagram_type"),
+            "requested_level": target.get("requested_level"),
+            "target_requirement_ids": None,
+            "pending_pattern": None,
+            "clarifying_message": None,
+            "processing_counter": (state.get("processing_counter") or 0) + 1,
         }
 
     async with async_session_factory() as db:
@@ -120,6 +199,7 @@ async def middle_supervisor(state: MiddleState, config: RunnableConfig) -> dict:
                 "pending_pattern": None,
                 "clarifying_message": None,
                 "processing_counter": (state.get("processing_counter") or 0) + 1,
+                **_lock_target(state, resolved_intent, diagram_type, None),
             }
         if len(active_requirements) == 1:
             # Exactly one active requirement -> unambiguous even without an explicit name.
@@ -132,9 +212,12 @@ async def middle_supervisor(state: MiddleState, config: RunnableConfig) -> dict:
                 "pending_pattern": None,
                 "clarifying_message": None,
                 "processing_counter": (state.get("processing_counter") or 0) + 1,
+                **_lock_target(state, resolved_intent, diagram_type, None),
             }
         if len(active_requirements) > 1:
-            # >1 active requirement and none named -> genuinely ambiguous.
+            # >1 active requirement and none named -> genuinely ambiguous. The TARGET
+            # (intent/diagram_type) is already fixed here -- only WHICH requirement(s)
+            # is still open, resolved next via user_confirm_inputs -- so lock now.
             options = [{"id": str(r.id), "summary": r.content[:120]} for r in active_requirements]
             if is_diagram:
                 # A diagram may represent SEVERAL requirements at once -> multi-select,
@@ -148,6 +231,7 @@ async def middle_supervisor(state: MiddleState, config: RunnableConfig) -> dict:
                     "pending_options_source": options,
                     "pending_action_context": "select_diagram_targets",
                     "clarifying_message": None,
+                    **_lock_target(state, resolved_intent, diagram_type, None),
                 }
             return {
                 "supervisor_visits": visits,
@@ -157,19 +241,22 @@ async def middle_supervisor(state: MiddleState, config: RunnableConfig) -> dict:
                 "pending_pattern": "select_requirement",
                 "pending_options_source": options,
                 "clarifying_message": None,
+                **_lock_target(state, resolved_intent, diagram_type, None),
             }
         # zero active requirements: nothing to be ambiguous about — let layer-3's own
         # guard_requirement_available handle the "no requirement" path.
 
+    requested_level = decision.level.value if decision.level else None
     return {
         "supervisor_visits": visits,
         "resolved_intent": resolved_intent,
         "diagram_type": diagram_type,
-        "requested_level": decision.level.value if decision.level else None,
+        "requested_level": requested_level,
         "target_requirement_ids": None,
         "pending_pattern": None,
         "clarifying_message": None,
         "processing_counter": (state.get("processing_counter") or 0) + 1,
+        **_lock_target(state, resolved_intent, diagram_type, requested_level),
     }
 
 
@@ -500,6 +587,11 @@ async def user_confirm_inputs(state: MiddleState) -> dict:
             "invalid_reason": None,
             "target_requirement_ids": None,
             "user_input": new_user_input or state.get("user_input"),
+            # The user explicitly changed the ask -- this is a genuinely NEW judgement,
+            # not a continuation of the old (now-stale) locked target.
+            "task_locked": False,
+            "task_target": None,
+            "target_fulfilled": None,
         }
 
     # cancel, or anything unrecognized -> fail-open to the cancel exit rather than
@@ -612,4 +704,5 @@ async def sysml_processing(state: MiddleState, config: RunnableConfig) -> dict:
         "processing_result": light_ref,
         "resolved_intent": None,  # consumed; middle_supervisor decides fresh next visit
         "result": "processed",
+        "target_fulfilled": _target_fulfilled(state.get("task_target"), processing_input),
     }
