@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from data.models import (
@@ -42,8 +42,8 @@ class UserRepo:
 
 class ProjectRepo:
     @staticmethod
-    async def create(db: AsyncSession, user_id: uuid.UUID, name: str) -> Project:
-        project = Project(user_id=user_id, name=name)
+    async def create(db: AsyncSession, user_id: uuid.UUID, name: str, description: str | None = None) -> Project:
+        project = Project(user_id=user_id, name=name, description=description)
         db.add(project)
         await db.flush()
         return project
@@ -59,6 +59,18 @@ class ProjectRepo:
             select(Project).where(Project.id == id, Project.user_id == user_id)
         )
         return result.scalar_one_or_none()
+
+    @staticmethod
+    async def delete(db: AsyncSession, project: Project) -> None:
+        """Deletes the project row. requirements/diagrams/files/published_requirements
+        of each of its sessions cascade at the DB level (ondelete=CASCADE all the way
+        down: projects -> sessions -> {requirements, diagrams, files, ...}). Does NOT
+        purge LangGraph checkpoints -- those have no FK to sessions at all, so the
+        caller must purge each session's checkpoint tree (CheckpointRepo) BEFORE
+        calling this, one session at a time (see app/api/routes/projects.py).
+        """
+        await db.delete(project)
+        await db.flush()
 
 
 class SessionRepo:
@@ -82,8 +94,61 @@ class SessionRepo:
 
     @staticmethod
     async def list_by_project(db: AsyncSession, project_id: uuid.UUID) -> list[Session]:
-        result = await db.execute(select(Session).where(Session.project_id == project_id))
+        """Most recently updated first (updated_at bumps on rename -- see rename())."""
+        result = await db.execute(
+            select(Session).where(Session.project_id == project_id).order_by(Session.updated_at.desc())
+        )
         return list(result.scalars().all())
+
+    @staticmethod
+    async def rename(db: AsyncSession, session: Session, title: str) -> Session:
+        """Sets the new title; updated_at bumps automatically (onupdate=func.now()
+        on the model, server-side) since this always emits an UPDATE for the row.
+        """
+        session.title = title
+        await db.flush()
+        await db.refresh(session)
+        return session
+
+    @staticmethod
+    async def delete(db: AsyncSession, session: Session) -> None:
+        """Deletes the session row. requirements/diagrams/files/published_requirements
+        cascade at the DB level (ondelete=CASCADE). Does NOT purge LangGraph
+        checkpoints -- callers must call CheckpointRepo.purge_thread_tree(db,
+        session.id) first, in the SAME transaction (see app/api/routes/projects.py).
+        """
+        await db.delete(session)
+        await db.flush()
+
+
+class CheckpointRepo:
+    """Raw SQL against the LangGraph-owned checkpointer tables (checkpoints,
+    checkpoint_blobs, checkpoint_writes) -- these are NOT mapped by our ORM models
+    (LangGraph's AsyncPostgresSaver owns and creates them), so this is the one place
+    in the repository layer that uses text() instead of the query builder.
+    """
+
+    _TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
+
+    @staticmethod
+    async def purge_thread_tree(db: AsyncSession, session_id: uuid.UUID) -> None:
+        """Deletes every checkpoint row, across all three tables, for the session's
+        OWN thread_id (str(session_id) -- session.id doubles as the outer Layer-1
+        thread_id) AND every thread_id DERIVED from it via the ':' prefix scheme
+        (f"{session_id}:middle:...", f"{session_id}:proc:...") -- Layer-2/Layer-3
+        sub-threads have NO foreign key to sessions, so a plain FK cascade can never
+        reach them; this is the only way to actually purge them.
+
+        Caller is responsible for committing in the same transaction as the session/
+        project row delete (no commit here -- this only flushes via execute).
+        """
+        sid = str(session_id)
+        prefix = f"{sid}:%"
+        for table in CheckpointRepo._TABLES:
+            await db.execute(
+                text(f"DELETE FROM {table} WHERE thread_id = :sid OR thread_id LIKE :prefix"),
+                {"sid": sid, "prefix": prefix},
+            )
 
 
 class RequirementRepo:

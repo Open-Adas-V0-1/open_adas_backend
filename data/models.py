@@ -58,6 +58,9 @@ class Project(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     name: Mapped[str]
+    # T6b Step 2: optional, free-text -- the API accepts it on create, so it must be
+    # persisted rather than silently dropped.
+    description: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     user: Mapped["User"] = relationship(back_populates="projects")
@@ -73,6 +76,8 @@ class Session(Base):
     thread_id: Mapped[str] = mapped_column(unique=True, index=True)
     title: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # T6b Step 2: bumped on rename (PATCH) -- drives "most recently updated first" ordering.
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
     project: Mapped["Project"] = relationship(back_populates="sessions")
     requirements: Mapped[list["Requirement"]] = relationship(
