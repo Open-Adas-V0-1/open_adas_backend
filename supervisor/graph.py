@@ -4,6 +4,8 @@ from langgraph.graph import END, START, StateGraph
 from agents.sysml.middle_graph import build_middle_graph
 from app.config import get_settings
 from harness.guards import checkpoint_durability
+from supervisor.finalize import finalize_turn
+from supervisor.memory import memory_optimization
 from supervisor.plan import plan_node
 from supervisor.plan_ops import in_progress_task, with_task_status
 from supervisor.plan_review import plan_review, route_from_plan_node, route_from_plan_review
@@ -113,8 +115,12 @@ def build_supervisor_graph(checkpointer=None):
     Step 4 (this build): a COMPLEX plan (more than one task) is routed through
     plan_review for HITL approval/editing/cancellation BEFORE execution starts; a
     SIMPLE (single-task) plan skips it entirely, straight to execution, no friction.
-    Step 5 adds memory_optimization / finalize_turn as a further new conditional target
-    off this same shape, without restructuring it.
+    Step 5 (this build): every turn now ends through finalize_turn instead of
+    route_from_top_supervisor returning END directly. memory_optimization is a further
+    CONDITIONAL target off that same routing decision -- only entered when the
+    short-term context is near its configured budget (memory_ops.is_context_near_full);
+    most turns skip it, straight to finalize_turn. Summarization itself is DEFERRED
+    (memory_optimization is a pass-through node for now); only the routing is real.
     """
     builder = StateGraph(SupervisorState)
 
@@ -122,6 +128,8 @@ def build_supervisor_graph(checkpointer=None):
     builder.add_node("plan_node", plan_node)
     builder.add_node("plan_review", plan_review)
     builder.add_node("sysml_middle_node", sysml_middle_node)
+    builder.add_node("memory_optimization", memory_optimization)
+    builder.add_node("finalize_turn", finalize_turn)
 
     builder.add_edge(START, "top_level_supervisor")
 
@@ -131,6 +139,8 @@ def build_supervisor_graph(checkpointer=None):
         {
             "plan_node": "plan_node",
             "sysml_middle_node": "sysml_middle_node",
+            "memory_optimization": "memory_optimization",
+            "finalize_turn": "finalize_turn",
             END: END,
         },
     )
@@ -154,6 +164,9 @@ def build_supervisor_graph(checkpointer=None):
     )
 
     builder.add_edge("sysml_middle_node", "top_level_supervisor")
+
+    builder.add_edge("memory_optimization", "finalize_turn")
+    builder.add_edge("finalize_turn", END)
 
     return builder.compile(checkpointer=checkpointer)
 

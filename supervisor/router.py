@@ -5,6 +5,7 @@ from app.schemas.supervisor import HubClassification, HubDecision
 from harness.guards import guard_breached
 from llm.factory import get_llm
 from llm.prompts import load_prompt
+from supervisor.memory_ops import is_context_near_full
 from supervisor.plan_ops import in_progress_task, next_pending_task, with_task_status
 from supervisor.state import SupervisorState
 
@@ -109,8 +110,11 @@ def route_from_top_supervisor(state: SupervisorState) -> str:
     if plan_state and in_progress_task(plan_state) is not None:
         # A task was just marked in_progress this visit -> delegate it to Layer-2.
         return "sysml_middle_node"
-    # simple_response and unclear answer directly and end here (unchanged from Steps
-    # 1-2). needs_execution with a plan whose tasks are ALL done also ends here for now
-    # -- Step 5 adds memory_optimization/finalize_turn as a further conditional target
-    # off this same shape, without restructuring this hub.
-    return END
+    # The turn's intent is complete here -- simple_response, unclear (Steps 1-2), or
+    # needs_execution with a plan whose tasks are ALL done (Step 3). Step 5: instead of
+    # ending directly, route through finalize_turn (and memory_optimization first, when
+    # the short-term context is near its configured budget) so every normal completion
+    # exits the SAME way.
+    if is_context_near_full(state):
+        return "memory_optimization"
+    return "finalize_turn"

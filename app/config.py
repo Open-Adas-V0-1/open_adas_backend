@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     # ── SysML processing thread TTL (checkpointer state only, never approved artifacts) ──
     sysml_thread_ttl_days: int = 30
 
+    # ── Memory optimization guard (Layer-1 rebuild, Step 5) ──
+    memory_opt_threshold_ratio: float = 0.8
+    memory_short_term_budget_tokens: int = 8000
+
     @property
     def database_url(self) -> str:
         return (
