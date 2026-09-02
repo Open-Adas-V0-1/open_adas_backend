@@ -89,6 +89,12 @@ class Settings(BaseSettings):
     # client asks for it, no trace event is ever built or emitted unless this is true.
     trace_enabled: bool = False
 
+    # ── Dev test UI (T6b Step 6) ──
+    # Serves static/dev_ui.html at GET /dev/ui -- a developer-only harness, never the
+    # product frontend. False by default; the route 404s (not 403) when disabled, same
+    # "don't reveal existence" convention as every ownership dependency in this project.
+    dev_ui_enabled: bool = False
+
     @property
     def database_url(self) -> str:
         return (

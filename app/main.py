@@ -2,8 +2,10 @@ import asyncio
 import sys
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import text
 
 # AsyncPostgresSaver (the production LangGraph checkpointer, attached below in
@@ -75,3 +77,16 @@ async def health():
     if result.get("db") != "ok" or result.get("storage") != "ok":
         return JSONResponse(status_code=503, content=result)
     return result
+
+
+_DEV_UI_PATH = Path(__file__).resolve().parent.parent / "static" / "dev_ui.html"
+
+
+@app.get("/dev/ui", include_in_schema=False)
+async def dev_ui():
+    """T6b Step 6 -- developer test harness only, never the product frontend. 404
+    (never 403, same convention as every ownership dependency) when the env flag is off.
+    """
+    if not settings.dev_ui_enabled:
+        raise HTTPException(status_code=404)
+    return FileResponse(_DEV_UI_PATH)
