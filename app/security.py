@@ -1,4 +1,3 @@
-<<<<<<< Updated upstream
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -46,14 +45,3 @@ def decode_access_token(token: str) -> uuid.UUID:
         return uuid.UUID(subject)
     except ValueError as exc:
         raise ValueError("token subject is not a valid user id") from exc
-=======
-import bcrypt
-
-
-def hash_password(plain: str) -> str:
-    return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-
-def verify_password(plain: str, hashed: str) -> bool:
-    return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
->>>>>>> Stashed changes
