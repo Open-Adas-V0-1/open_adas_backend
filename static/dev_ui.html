@@ -1,0 +1,991 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Open_Adas dev chat UI</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1b1e24; --panel2: #21252c; --border: #333944;
+    --text: #d8dce3; --dim: #838a99; --accent: #4f8cff; --ok: #3fbf6b;
+    --warn: #e0a83c; --err: #e05a4f; --mono: "Consolas", "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 var(--mono); }
+  body { display: flex; flex-direction: column; }
+  button { font: inherit; cursor: pointer; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 3px; padding: 4px 9px; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { border-color: var(--err); color: var(--err); }
+  input[type=text], input[type=password], input[type=email], textarea, select {
+    font: inherit; background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 3px; padding: 4px 6px; width: 100%; }
+  textarea { resize: vertical; }
+  label { color: var(--dim); font-size: 11px; }
+  pre { white-space: pre-wrap; word-break: break-word; background: #0f1114; border: 1px solid var(--border);
+    border-radius: 3px; padding: 6px 8px; margin: 4px 0; }
+  h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
+  .row { display: flex; gap: 6px; align-items: center; }
+  .col { display: flex; flex-direction: column; gap: 6px; }
+  .mono { font-family: var(--mono); }
+  .dim { color: var(--dim); }
+  .hidden { display: none !important; }
+  .pill { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 11px; border: 1px solid var(--border); }
+  .pill.active { color: var(--ok); border-color: var(--ok); }
+  .pill.superseded { color: var(--dim); }
+
+  #authbar { display: flex; gap: 8px; align-items: center; padding: 6px 10px;
+    background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  #authbar .grow { flex: 1; }
+
+  #errorbar { max-height: 90px; overflow-y: auto; background: #1a1010; border-bottom: 1px solid var(--err);
+    font-size: 11px; }
+  #errorbar .err-line { padding: 2px 10px; border-bottom: 1px solid #2a1818; color: #ff9d94; white-space: pre-wrap; }
+  #errorbar:empty { display: none; }
+
+  #layout { flex: 1; display: grid; grid-template-columns: 280px 1fr 380px; min-height: 0; }
+  #left, #right { overflow-y: auto; padding: 10px; border-right: 1px solid var(--border); }
+  #right { border-right: none; border-left: 1px solid var(--border); }
+  #center { display: flex; flex-direction: column; min-height: 0; }
+
+  .section { margin-bottom: 16px; }
+  .list-item { padding: 5px 6px; border: 1px solid transparent; border-radius: 3px; cursor: pointer;
+    display: flex; justify-content: space-between; gap: 4px; align-items: center; }
+  .list-item:hover { border-color: var(--border); }
+  .list-item.selected { background: var(--panel2); border-color: var(--accent); }
+  .list-item .actions { display: none; gap: 3px; }
+  .list-item:hover .actions { display: flex; }
+  .sid { font-size: 10px; color: var(--dim); user-select: all; cursor: text; }
+
+  #chatlog { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 85%; padding: 7px 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: #fff; }
+  .msg.assistant { align-self: flex-start; background: var(--panel2); border: 1px solid var(--border); }
+  .msg.system { align-self: center; color: var(--dim); font-size: 11px; }
+  .msg.error { align-self: flex-start; background: #2a1414; border: 1px solid var(--err); color: #ff9d94; }
+  .status-line { align-self: flex-start; color: var(--warn); font-size: 11px; font-style: italic; }
+  .done-line { align-self: flex-start; color: var(--dim); font-size: 11px; }
+
+  .interrupt { align-self: stretch; background: var(--panel2); border: 1px solid var(--accent);
+    border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .interrupt .question { font-weight: bold; }
+  .interrupt .opt-row { display: flex; align-items: center; gap: 6px; }
+  .interrupt .btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+  .task-row { border: 1px solid var(--border); border-radius: 3px; padding: 5px 7px; }
+
+  #composer { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--border); }
+  #composer input { flex: 1; }
+
+  .diagram-list-item .type-badge { color: var(--dim); font-size: 10px; }
+  #mermaid-out svg { max-width: 100%; }
+
+  #tracebar { border-top: 1px solid var(--border); background: var(--panel); }
+  #tracebar .tb-head { display: flex; gap: 8px; align-items: center; padding: 5px 10px; }
+  #tracepanel { max-height: 220px; overflow-y: auto; font-size: 11px; }
+  .trace-row { padding: 2px 10px; border-bottom: 1px solid #24272e; cursor: pointer; white-space: pre; }
+  .trace-row:hover { background: var(--panel2); }
+  .trace-data { padding: 4px 20px; background: #0f1114; white-space: pre-wrap; word-break: break-word; }
+</style>
+</head>
+<body>
+
+<div id="authbar">
+  <strong>Open_Adas dev UI</strong>
+  <span id="who" class="dim"></span>
+  <span class="grow"></span>
+  <input id="auth-email" type="email" placeholder="email" style="width:200px">
+  <input id="auth-password" type="password" placeholder="password" style="width:150px">
+  <button id="btn-register">Register</button>
+  <button id="btn-login" class="primary">Login</button>
+  <button id="btn-logout" class="hidden">Logout / clear</button>
+</div>
+
+<div id="errorbar"></div>
+
+<div id="layout">
+  <aside id="left">
+    <div class="section">
+      <h3>Projects</h3>
+      <div id="project-list" class="col"></div>
+      <div class="row" style="margin-top:6px">
+        <input id="new-project-name" type="text" placeholder="new project name">
+        <button id="btn-new-project">+</button>
+      </div>
+    </div>
+    <div class="section">
+      <h3>Sessions</h3>
+      <div id="session-list" class="col"></div>
+      <div class="row" style="margin-top:6px">
+        <input id="new-session-title" type="text" placeholder="new session title (optional)">
+        <button id="btn-new-session">+</button>
+      </div>
+    </div>
+  </aside>
+
+  <main id="center">
+    <div id="chatlog"></div>
+    <div id="composer">
+      <input id="chat-input" type="text" placeholder="type a message and press Send…" disabled>
+      <button id="btn-send" class="primary" disabled>Send</button>
+    </div>
+  </main>
+
+  <aside id="right">
+    <div class="section">
+      <div class="row">
+        <h3 style="flex:1">Requirements</h3>
+        <button id="btn-req-refresh">Refresh</button>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="req-active-only" checked> active only</label>
+        <select id="req-level-filter">
+          <option value="">all levels</option>
+          <option value="operational">operational</option>
+          <option value="functional">functional</option>
+          <option value="physical">physical</option>
+        </select>
+      </div>
+      <div id="req-list" class="col" style="margin-top:6px"></div>
+      <div id="req-detail"></div>
+    </div>
+    <div class="section">
+      <div class="row">
+        <h3 style="flex:1">Diagrams</h3>
+        <button id="btn-diag-refresh">Refresh</button>
+      </div>
+      <label><input type="checkbox" id="diag-active-only" checked> active only</label>
+      <div id="diag-list" class="col" style="margin-top:6px"></div>
+      <div id="diag-detail"></div>
+    </div>
+  </aside>
+</div>
+
+<div id="tracebar">
+  <div class="tb-head">
+    <label><input type="checkbox" id="trace-on"> trace (?trace=1)</label>
+    <button id="btn-trace-toggle">show panel</button>
+    <button id="btn-trace-clear">clear</button>
+    <span class="dim" id="trace-count"></span>
+  </div>
+  <div id="tracepanel" class="hidden"></div>
+</div>
+
+<script>
+'use strict';
+
+// ── state ──────────────────────────────────────────────────────────────────
+let token = localStorage.getItem('dev_ui_token') || null;
+let currentUser = null;
+let projects = [];
+let sessions = [];
+let selectedProjectId = null;
+let selectedSessionId = null;
+let turnRunning = false;
+let traceEvents = [];
+let currentPendingWidgetEl = null;
+
+// ── error/debug bar ──────────────────────────────────────────────────────────
+function logError(method, url, status, body) {
+  const el = document.getElementById('errorbar');
+  const line = document.createElement('div');
+  line.className = 'err-line';
+  const ts = new Date().toISOString().split('T')[1].slice(0, 8);
+  line.textContent = `[${ts}] ${method} ${url} -> ${status}\n${typeof body === 'string' ? body : JSON.stringify(body)}`;
+  el.prepend(line);
+  while (el.children.length > 40) el.removeChild(el.lastChild);
+}
+
+// ── plain JSON API helper ────────────────────────────────────────────────────
+async function api(path, { method = 'GET', body, query } = {}) {
+  let url = path;
+  if (query) {
+    const qs = new URLSearchParams(
+      Object.entries(query).filter(([, v]) => v !== undefined && v !== null && v !== '')
+    ).toString();
+    if (qs) url += (url.includes('?') ? '&' : '?') + qs;
+  }
+  const headers = {};
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  let resp;
+  try {
+    resp = await fetch(url, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+  } catch (netErr) {
+    logError(method, url, 'network', String(netErr));
+    throw netErr;
+  }
+  const text = await resp.text();
+  let data = null;
+  if (text) { try { data = JSON.parse(text); } catch (e) { data = text; } }
+  if (!resp.ok) {
+    logError(method, url, resp.status, data);
+    const err = new Error('HTTP ' + resp.status);
+    err.status = resp.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+// ── SSE consumer: fetch() + manual ReadableStream parsing (EventSource can't
+// send Authorization headers and is GET-only, so it cannot be used for these
+// authenticated POST streams). Buffer persists across chunk reads so an event
+// split across TCP chunks is never lost or mis-parsed. ────────────────────────
+async function* sseStream(path, body) {
+  let url = path;
+  if (document.getElementById('trace-on').checked) {
+    url += (url.includes('?') ? '&' : '?') + 'trace=1';
+  }
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  let resp;
+  try {
+    resp = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body || {}) });
+  } catch (netErr) {
+    logError('POST', url, 'network', String(netErr));
+    throw netErr;
+  }
+  if (!resp.ok) {
+    const text = await resp.text();
+    let data; try { data = JSON.parse(text); } catch (e) { data = text; }
+    logError('POST', url, resp.status, data);
+    const err = new Error('HTTP ' + resp.status);
+    err.status = resp.status;
+    err.data = data;
+    throw err;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (value) buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf('\n\n')) !== -1) {
+      const rawEvent = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      let eventName = 'message';
+      const dataLines = [];
+      for (const line of rawEvent.split('\n')) {
+        if (line.startsWith('event:')) eventName = line.slice(6).trim();
+        else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+      }
+      if (dataLines.length) {
+        const raw = dataLines.join('\n');
+        let parsed; try { parsed = JSON.parse(raw); } catch (e) { parsed = { raw }; }
+        yield { event: eventName, data: parsed };
+      }
+    }
+    if (done) break;
+  }
+}
+
+// ── auth ──────────────────────────────────────────────────────────────────
+function setToken(t) {
+  token = t;
+  if (t) localStorage.setItem('dev_ui_token', t);
+  else localStorage.removeItem('dev_ui_token');
+  updateAuthUI();
+}
+
+function updateAuthUI() {
+  const loggedIn = !!token;
+  document.getElementById('btn-logout').classList.toggle('hidden', !loggedIn);
+  document.getElementById('btn-register').classList.toggle('hidden', loggedIn);
+  document.getElementById('btn-login').classList.toggle('hidden', loggedIn);
+  document.getElementById('auth-email').classList.toggle('hidden', loggedIn);
+  document.getElementById('auth-password').classList.toggle('hidden', loggedIn);
+  document.getElementById('who').textContent = loggedIn && currentUser ? currentUser.email : '';
+}
+
+document.getElementById('btn-register').onclick = async () => {
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  try {
+    await api('/auth/register', { method: 'POST', body: { email, password } });
+    await doLogin(email, password);
+  } catch (e) { /* already logged to errorbar */ }
+};
+
+document.getElementById('btn-login').onclick = async () => {
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  await doLogin(email, password);
+};
+
+async function doLogin(email, password) {
+  try {
+    const res = await api('/auth/login', { method: 'POST', body: { email, password } });
+    setToken(res.access_token);
+    await loadMe();
+    await refreshProjects();
+  } catch (e) { /* logged */ }
+}
+
+async function loadMe() {
+  try { currentUser = await api('/auth/me'); updateAuthUI(); }
+  catch (e) { currentUser = null; }
+}
+
+document.getElementById('btn-logout').onclick = () => {
+  setToken(null);
+  currentUser = null;
+  projects = []; sessions = [];
+  selectedProjectId = null; selectedSessionId = null;
+  renderProjects(); renderSessions();
+  clearChat();
+  document.getElementById('chat-input').disabled = true;
+  document.getElementById('btn-send').disabled = true;
+};
+
+// ── projects / sessions ──────────────────────────────────────────────────────
+async function refreshProjects() {
+  try { projects = await api('/projects'); renderProjects(); }
+  catch (e) { if (e.status === 401) setToken(null); }
+}
+
+function renderProjects() {
+  const el = document.getElementById('project-list');
+  el.innerHTML = '';
+  for (const p of projects) {
+    const row = document.createElement('div');
+    row.className = 'list-item' + (p.id === selectedProjectId ? ' selected' : '');
+    row.innerHTML = `<span>${escapeHtml(p.name)}</span>`;
+    const actions = document.createElement('span');
+    actions.className = 'actions';
+    const del = document.createElement('button');
+    del.textContent = '✕'; del.className = 'danger';
+    del.onclick = async (ev) => {
+      ev.stopPropagation();
+      if (!confirm('Delete project "' + p.name + '" and all its sessions?')) return;
+      await api('/projects/' + p.id, { method: 'DELETE' });
+      if (selectedProjectId === p.id) { selectedProjectId = null; sessions = []; selectedSessionId = null; renderSessions(); clearChat(); }
+      await refreshProjects();
+    };
+    actions.appendChild(del);
+    row.appendChild(actions);
+    row.onclick = () => selectProject(p.id);
+    el.appendChild(row);
+  }
+}
+
+async function selectProject(id) {
+  selectedProjectId = id;
+  selectedSessionId = null;
+  renderProjects();
+  await refreshSessions();
+  clearChat();
+}
+
+document.getElementById('btn-new-project').onclick = async () => {
+  const name = document.getElementById('new-project-name').value.trim();
+  if (!name) return;
+  try {
+    const p = await api('/projects', { method: 'POST', body: { name } });
+    document.getElementById('new-project-name').value = '';
+    await refreshProjects();
+    await selectProject(p.id);
+  } catch (e) { /* logged */ }
+};
+
+async function refreshSessions() {
+  if (!selectedProjectId) { sessions = []; renderSessions(); return; }
+  try { sessions = await api('/projects/' + selectedProjectId + '/sessions'); renderSessions(); }
+  catch (e) { /* logged */ }
+}
+
+function renderSessions() {
+  const el = document.getElementById('session-list');
+  el.innerHTML = '';
+  for (const s of sessions) {
+    const row = document.createElement('div');
+    row.className = 'list-item' + (s.id === selectedSessionId ? ' selected' : '');
+    const label = document.createElement('div');
+    label.innerHTML = `<div>${escapeHtml(s.title || '(untitled)')}</div><div class="sid">${s.id}</div>`;
+    row.appendChild(label);
+    const actions = document.createElement('span');
+    actions.className = 'actions';
+    const ren = document.createElement('button');
+    ren.textContent = '✎';
+    ren.onclick = async (ev) => {
+      ev.stopPropagation();
+      const title = prompt('New title:', s.title || '');
+      if (title === null) return;
+      await api('/sessions/' + s.id, { method: 'PATCH', body: { title } });
+      await refreshSessions();
+    };
+    const del = document.createElement('button');
+    del.textContent = '✕'; del.className = 'danger';
+    del.onclick = async (ev) => {
+      ev.stopPropagation();
+      if (!confirm('Delete this session? This purges its checkpoints.')) return;
+      await api('/sessions/' + s.id, { method: 'DELETE' });
+      if (selectedSessionId === s.id) { selectedSessionId = null; clearChat(); }
+      await refreshSessions();
+    };
+    actions.appendChild(ren); actions.appendChild(del);
+    row.appendChild(actions);
+    row.onclick = () => selectSession(s.id);
+    el.appendChild(row);
+  }
+}
+
+document.getElementById('btn-new-session').onclick = async () => {
+  if (!selectedProjectId) { alert('Select a project first.'); return; }
+  const title = document.getElementById('new-session-title').value.trim();
+  try {
+    const s = await api('/projects/' + selectedProjectId + '/sessions', { method: 'POST', body: { title: title || null } });
+    document.getElementById('new-session-title').value = '';
+    await refreshSessions();
+    await selectSession(s.id);
+  } catch (e) { /* logged */ }
+};
+
+async function selectSession(id) {
+  selectedSessionId = id;
+  renderSessions();
+  clearChat();
+  document.getElementById('chat-input').disabled = false;
+  document.getElementById('btn-send').disabled = false;
+  await refreshArtifacts();
+  await checkPending();
+}
+
+// ── chat log rendering ──────────────────────────────────────────────────────
+function clearChat() {
+  document.getElementById('chatlog').innerHTML = '';
+  currentPendingWidgetEl = null;
+}
+
+function chatEl() { return document.getElementById('chatlog'); }
+
+function scrollChatToBottom() {
+  const el = chatEl();
+  el.scrollTop = el.scrollHeight;
+}
+
+function appendBubble(cls, text) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + cls;
+  div.textContent = text;
+  chatEl().appendChild(div);
+  scrollChatToBottom();
+  return div;
+}
+
+function appendSystemNote(text) {
+  appendBubble('system', text);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// ── sending a turn / resume, shared by both entry points ───────────────────────
+function setStatusLine(text) {
+  let el = chatEl().querySelector('.status-line');
+  if (!text) { if (el) el.remove(); return; }
+  if (!el) { el = document.createElement('div'); el.className = 'status-line'; chatEl().appendChild(el); }
+  el.textContent = text;
+  scrollChatToBottom();
+}
+
+function setSendEnabled(enabled) {
+  turnRunning = !enabled;
+  document.getElementById('btn-send').disabled = !enabled || !selectedSessionId;
+  document.getElementById('chat-input').disabled = !enabled || !selectedSessionId;
+}
+
+async function driveStream(path, body) {
+  if (currentPendingWidgetEl) { currentPendingWidgetEl.remove(); currentPendingWidgetEl = null; }
+  setSendEnabled(false);
+  let assistantBubble = null;
+  let assistantText = '';
+  try {
+    for await (const { event, data } of sseStream(path, body)) {
+      if (document.getElementById('trace-on').checked && event !== 'trace') {
+        // no-op; trace events handled below
+      }
+      switch (event) {
+        case 'turn_started':
+          break;
+        case 'token':
+          if (!assistantBubble) assistantBubble = appendBubble('assistant', '');
+          assistantText += data.text;
+          assistantBubble.textContent = assistantText;
+          scrollChatToBottom();
+          break;
+        case 'status':
+          setStatusLine(`… ${data.node} (layer ${data.layer})`);
+          break;
+        case 'interrupt':
+          setStatusLine(null);
+          renderInterruptWidget(data.pattern, data.payload);
+          break;
+        case 'done':
+          setStatusLine(null);
+          appendBubble('done-line', `done: ${data.status}` + (data.light_refs && data.light_refs.length
+            ? '  light_refs=' + JSON.stringify(data.light_refs) : ''));
+          if (data.status === 'completed') await refreshArtifacts();
+          break;
+        case 'error':
+          setStatusLine(null);
+          appendBubble('error', 'error: ' + data.message);
+          break;
+        case 'trace':
+          recordTraceEvent(data);
+          break;
+        default:
+          appendSystemNote('unknown event: ' + event + ' ' + JSON.stringify(data));
+      }
+    }
+  } catch (e) {
+    setStatusLine(null);
+    if (e.status === 409) {
+      const detail = (e.data && e.data.detail) || {};
+      appendBubble('error', `409 ${detail.status || ''}: ${detail.message || e.message}`);
+    } else if (e.status) {
+      const msg = e.data && e.data.detail ? JSON.stringify(e.data.detail) : JSON.stringify(e.data);
+      appendBubble('error', `HTTP ${e.status}: ${msg}`);
+    } else {
+      appendBubble('error', 'network error: ' + e.message);
+    }
+  } finally {
+    setSendEnabled(true);
+  }
+}
+
+document.getElementById('btn-send').onclick = sendMessage;
+document.getElementById('chat-input').addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter') sendMessage();
+});
+
+async function sendMessage() {
+  if (turnRunning || !selectedSessionId) return;
+  const input = document.getElementById('chat-input');
+  const msg = input.value.trim();
+  if (!msg) return;
+  input.value = '';
+  appendBubble('user', msg);
+  await driveStream('/sessions/' + selectedSessionId + '/turn', { message: msg });
+}
+
+async function submitResume(body) {
+  await driveStream('/sessions/' + selectedSessionId + '/resume', body);
+}
+
+async function checkPending() {
+  if (!selectedSessionId) return;
+  try {
+    const res = await api('/sessions/' + selectedSessionId + '/pending');
+    if (res.pending) {
+      appendSystemNote('Restored pending interrupt on reload: ' + res.pattern);
+      renderInterruptWidget(res.pattern, res.payload);
+    }
+  } catch (e) { /* logged */ }
+}
+
+// ── interrupt widgets — one renderer per pattern, built directly from
+// app/schemas/resume.py's Pydantic models (see chat report for the exact fields). ──
+function renderInterruptWidget(pattern, payload) {
+  if (currentPendingWidgetEl) currentPendingWidgetEl.remove();
+  const box = document.createElement('div');
+  box.className = 'interrupt';
+  const builder = WIDGETS[pattern] || renderUnknownWidget;
+  builder(box, payload);
+  chatEl().appendChild(box);
+  currentPendingWidgetEl = box;
+  scrollChatToBottom();
+}
+
+function widgetHeader(box, question) {
+  const q = document.createElement('div');
+  q.className = 'question';
+  q.textContent = question || '';
+  box.appendChild(q);
+}
+
+function makeButton(label, cls, onClick) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  if (cls) b.className = cls;
+  b.onclick = onClick;
+  return b;
+}
+
+function revealTextField(box, placeholder, onSubmit, submitLabel) {
+  const wrap = document.createElement('div');
+  wrap.className = 'row';
+  const ta = document.createElement('input');
+  ta.type = 'text'; ta.placeholder = placeholder;
+  const send = makeButton(submitLabel || 'Send', 'primary', () => onSubmit(ta.value));
+  wrap.appendChild(ta); wrap.appendChild(send);
+  box.appendChild(wrap);
+  ta.focus();
+}
+
+const WIDGETS = {
+  plan_review(box, payload) {
+    widgetHeader(box, payload.question);
+    const tasksJson = JSON.stringify(payload.tasks || [], null, 2);
+    for (const t of payload.tasks || []) {
+      const row = document.createElement('div');
+      row.className = 'task-row';
+      row.innerHTML = `<b>${escapeHtml(t.id)}</b> [${escapeHtml(t.intent)}${t.level ? ', ' + escapeHtml(t.level) : ''}]`
+        + (t.depends_on ? ` <span class="dim">depends_on=${escapeHtml(t.depends_on)}</span>` : '')
+        + `<div>${escapeHtml(t.description)}</div>`;
+      box.appendChild(row);
+    }
+    const modifyArea = document.createElement('div');
+    modifyArea.className = 'hidden col';
+    const ta = document.createElement('textarea');
+    ta.rows = 8; ta.value = tasksJson;
+    const submitModify = makeButton('Submit edited tasks', 'primary', () => {
+      let tasks;
+      try { tasks = JSON.parse(ta.value); } catch (e) { alert('Invalid JSON: ' + e.message); return; }
+      submitResume({ action: 'modify', tasks });
+    });
+    modifyArea.appendChild(document.createElement('div')).textContent =
+      'Edit the tasks JSON below (PlannedTask-shaped: description, intent, level?, depends_on_task_number?), then submit:';
+    modifyArea.appendChild(ta);
+    modifyArea.appendChild(submitModify);
+    box.appendChild(modifyArea);
+    const btns = document.createElement('div'); btns.className = 'btns';
+    btns.appendChild(makeButton('Approve', 'primary', () => submitResume({ action: 'approve' })));
+    btns.appendChild(makeButton('Modify…', null, () => modifyArea.classList.toggle('hidden')));
+    btns.appendChild(makeButton('Cancel', 'danger', () => submitResume({ action: 'cancel' })));
+    box.appendChild(btns);
+  },
+
+  requirement_review(box, payload) {
+    widgetHeader(box, `Review draft (${payload.source_node || 'requirement'}, level=${payload.level || '?'})`);
+    const pre = document.createElement('pre');
+    pre.textContent = payload.draft || '(empty)';
+    box.appendChild(pre);
+    if (payload.mermaid) {
+      const m = document.createElement('div');
+      m.textContent = '(mermaid preview)';
+      box.appendChild(m);
+      renderMermaidInto(m, payload.mermaid);
+    }
+    if (payload.verify_warning) {
+      const w = document.createElement('div'); w.style.color = 'var(--warn)';
+      w.textContent = 'verify_warning: ' + payload.verify_warning;
+      box.appendChild(w);
+    }
+    if (payload.verify_diagnostics && payload.verify_diagnostics.length) {
+      const d = document.createElement('pre');
+      d.textContent = 'verify_diagnostics:\n' + JSON.stringify(payload.verify_diagnostics, null, 2);
+      box.appendChild(d);
+    }
+    const feedbackArea = document.createElement('div'); feedbackArea.className = 'hidden row';
+    const questionArea = document.createElement('div'); questionArea.className = 'hidden row';
+    box.appendChild(feedbackArea); box.appendChild(questionArea);
+    const btns = document.createElement('div'); btns.className = 'btns';
+    btns.appendChild(makeButton('Approve', 'primary', () => submitResume({ action: 'approve' })));
+    btns.appendChild(makeButton('Regenerate (feedback)…', null, () => {
+      feedbackArea.classList.remove('hidden'); feedbackArea.innerHTML = '';
+      revealTextField(feedbackArea, 'feedback for regeneration', (v) => submitResume({ action: 'regenerate', feedback: v }), 'Regenerate');
+    }));
+    btns.appendChild(makeButton('Ask a question…', null, () => {
+      questionArea.classList.remove('hidden'); questionArea.innerHTML = '';
+      revealTextField(questionArea, 'your question', (v) => submitResume({ action: 'question', question: v }), 'Ask');
+    }));
+    btns.appendChild(makeButton('Cancel', 'danger', () => submitResume({ action: 'cancel' })));
+    box.appendChild(btns);
+  },
+
+  select_requirement(box, payload) {
+    widgetHeader(box, payload.question);
+    const name = 'sel_' + Math.random().toString(36).slice(2);
+    for (const opt of payload.options || []) {
+      const row = document.createElement('div'); row.className = 'opt-row';
+      const radio = document.createElement('input');
+      radio.type = 'radio'; radio.name = name; radio.value = opt.id;
+      row.appendChild(radio);
+      const lbl = document.createElement('span');
+      lbl.innerHTML = `<span class="mono dim">${opt.id}</span> ${escapeHtml(opt.summary)}`;
+      row.appendChild(lbl);
+      box.appendChild(row);
+    }
+    const modifyArea = document.createElement('div'); modifyArea.className = 'hidden';
+    box.appendChild(modifyArea);
+    const btns = document.createElement('div'); btns.className = 'btns';
+    btns.appendChild(makeButton('Confirm', 'primary', () => {
+      const chosen = box.querySelector(`input[name="${name}"]:checked`);
+      if (!chosen) { alert('Select one option first.'); return; }
+      submitResume({ action: 'confirm', selected_id: chosen.value });
+    }));
+    btns.appendChild(makeButton('Modify…', null, () => {
+      modifyArea.classList.remove('hidden'); modifyArea.innerHTML = '';
+      revealTextField(modifyArea, 'rephrase your request', (v) => submitResume({ action: 'modify', user_input: v }));
+    }));
+    btns.appendChild(makeButton('Cancel', 'danger', () => submitResume({ action: 'cancel' })));
+    box.appendChild(btns);
+  },
+
+  select_requirements_for_diagram(box, payload) {
+    widgetHeader(box, payload.question + (payload.min_selected ? ` (min ${payload.min_selected})` : ''));
+    const checks = [];
+    let selectAllBox = null;
+    if (payload.allow_all) {
+      const row = document.createElement('div'); row.className = 'opt-row';
+      selectAllBox = document.createElement('input'); selectAllBox.type = 'checkbox';
+      row.appendChild(selectAllBox);
+      row.appendChild(document.createTextNode('select all'));
+      box.appendChild(row);
+      selectAllBox.onchange = () => { for (const c of checks) c.disabled = selectAllBox.checked; };
+    }
+    for (const opt of payload.options || []) {
+      const row = document.createElement('div'); row.className = 'opt-row';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = opt.id;
+      checks.push(cb);
+      row.appendChild(cb);
+      const lbl = document.createElement('span');
+      lbl.innerHTML = `<span class="mono dim">${opt.id}</span> ${escapeHtml(opt.summary)}`;
+      row.appendChild(lbl);
+      box.appendChild(row);
+    }
+    const modifyArea = document.createElement('div'); modifyArea.className = 'hidden';
+    box.appendChild(modifyArea);
+    const btns = document.createElement('div'); btns.className = 'btns';
+    btns.appendChild(makeButton('Confirm', 'primary', () => {
+      if (selectAllBox && selectAllBox.checked) { submitResume({ action: 'confirm', select_all: true }); return; }
+      const ids = checks.filter(c => c.checked).map(c => c.value);
+      if (!ids.length) { alert('Select at least ' + (payload.min_selected || 1) + ' requirement(s), or use select all.'); return; }
+      submitResume({ action: 'confirm', selected_ids: ids });
+    }));
+    btns.appendChild(makeButton('Modify…', null, () => {
+      modifyArea.classList.remove('hidden'); modifyArea.innerHTML = '';
+      revealTextField(modifyArea, 'rephrase your request', (v) => submitResume({ action: 'modify', user_input: v }));
+    }));
+    btns.appendChild(makeButton('Cancel', 'danger', () => submitResume({ action: 'cancel' })));
+    box.appendChild(btns);
+  },
+
+  confirm_diagram_type(box, payload) {
+    widgetHeader(box, payload.question);
+    const btns = document.createElement('div'); btns.className = 'btns';
+    for (const opt of payload.options || []) {
+      btns.appendChild(makeButton(opt, null, () => submitResume({ action: 'confirm', selected_diagram_type: opt })));
+    }
+    btns.appendChild(makeButton('Cancel', 'danger', () => submitResume({ action: 'cancel' })));
+    box.appendChild(btns);
+  },
+
+  confirm_action(box, payload) {
+    widgetHeader(box, payload.question);
+    const modifyArea = document.createElement('div'); modifyArea.className = 'hidden';
+    box.appendChild(modifyArea);
+    const btns = document.createElement('div'); btns.className = 'btns';
+    btns.appendChild(makeButton('Confirm', 'primary', () => submitResume({ action: 'confirm' })));
+    // 'modify' is also a legal action for this pattern in the real schema (used e.g.
+    // for resolve_level's missing_level_source pivot), beyond the task's confirm/cancel
+    // spec -- included as a secondary control since it's a genuine resumable path.
+    btns.appendChild(makeButton('Modify…', null, () => {
+      modifyArea.classList.remove('hidden'); modifyArea.innerHTML = '';
+      revealTextField(modifyArea, 'rephrase your request', (v) => submitResume({ action: 'modify', user_input: v }));
+    }));
+    btns.appendChild(makeButton('Cancel', 'danger', () => submitResume({ action: 'cancel' })));
+    box.appendChild(btns);
+  },
+
+  clarify_request(box, payload) {
+    widgetHeader(box, payload.question);
+    revealTextField(box, 'your reply', (v) => submitResume({ action: 'modify', user_input: v }), 'Reply');
+    const btns = document.createElement('div'); btns.className = 'btns';
+    btns.appendChild(makeButton('Cancel', 'danger', () => submitResume({ action: 'cancel' })));
+    box.appendChild(btns);
+  },
+
+  // Not one of the task's 7 named patterns, but a real, frequently-hit interrupt
+  // (supervisor/plan.py's plan_node, PlanClarifyResume) -- omitting it would make
+  // this interrupt permanently unresumable through this UI. Its resume shape is
+  // {"user_input": ...} with NO "action" field at all, and the node genuinely has
+  // no cancel path in this shape (see PlanClarifyResume) -- so no Cancel button here.
+  plan_clarify(box, payload) {
+    widgetHeader(box, payload.question);
+    revealTextField(box, 'clarify your request', (v) => submitResume({ user_input: v }), 'Reply');
+  },
+};
+
+function renderUnknownWidget(box, payload) {
+  widgetHeader(box, '(unrecognized pattern) ' + JSON.stringify(payload));
+  const ta = document.createElement('textarea');
+  ta.rows = 4; ta.placeholder = '{"action": "..."}';
+  box.appendChild(ta);
+  box.appendChild(makeButton('Send raw JSON', 'primary', () => {
+    let body; try { body = JSON.parse(ta.value); } catch (e) { alert('Invalid JSON'); return; }
+    submitResume(body);
+  }));
+}
+
+// ── artifacts panel ──────────────────────────────────────────────────────────
+async function refreshArtifacts() {
+  if (!selectedSessionId) return;
+  await Promise.all([loadRequirements(), loadDiagrams()]);
+}
+
+document.getElementById('btn-req-refresh').onclick = loadRequirements;
+document.getElementById('req-active-only').onchange = loadRequirements;
+document.getElementById('req-level-filter').onchange = loadRequirements;
+
+async function loadRequirements() {
+  if (!selectedSessionId) return;
+  const activeOnly = document.getElementById('req-active-only').checked;
+  const level = document.getElementById('req-level-filter').value;
+  let reqs;
+  try {
+    reqs = await api('/sessions/' + selectedSessionId + '/requirements', {
+      query: { active_only: activeOnly, level: level || undefined, limit: 200 },
+    });
+  } catch (e) { return; }
+  const el = document.getElementById('req-list');
+  el.innerHTML = '';
+  for (const r of reqs) {
+    const row = document.createElement('div');
+    row.className = 'list-item';
+    row.innerHTML = `<span>${escapeHtml(r.level)} v${r.version} `
+      + `<span class="pill ${r.is_active ? 'active' : 'superseded'}">${r.is_active ? 'active' : 'superseded'}</span></span>`;
+    row.onclick = () => showRequirementDetail(r.id);
+    el.appendChild(row);
+  }
+}
+
+async function showRequirementDetail(id) {
+  let r;
+  try { r = await api('/requirements/' + id); } catch (e) { return; }
+  const el = document.getElementById('req-detail');
+  el.innerHTML = '';
+  const meta = document.createElement('div');
+  meta.className = 'dim';
+  meta.textContent = `id=${r.id}  root=${r.root_id}  v${r.version}  `
+    + (r.derived_from_requirement_id ? `derived_from=${r.derived_from_requirement_id}` : '(no derivation source)');
+  el.appendChild(meta);
+  const pre = document.createElement('pre');
+  pre.textContent = r.content;
+  el.appendChild(pre);
+  const btn = makeButton('Show versions', null, () => showRequirementVersions(r.root_id));
+  el.appendChild(btn);
+  const versionsEl = document.createElement('div');
+  el.appendChild(versionsEl);
+  el._versionsEl = versionsEl;
+  el._lastId = r.id;
+  el.appendChild(document.createElement('div'));
+  el._showVersionsFor = async () => {
+    let versions;
+    try { versions = await api('/requirements/' + r.id + '/versions'); } catch (e) { return; }
+    versionsEl.innerHTML = versions.map(v =>
+      `<div>v${v.version} <span class="pill ${v.is_active ? 'active' : 'superseded'}">${v.status}</span> <span class="dim">${v.id}</span></div>`
+    ).join('');
+  };
+  btn.onclick = el._showVersionsFor;
+}
+
+document.getElementById('btn-diag-refresh').onclick = loadDiagrams;
+document.getElementById('diag-active-only').onchange = loadDiagrams;
+
+async function loadDiagrams() {
+  if (!selectedSessionId) return;
+  const activeOnly = document.getElementById('diag-active-only').checked;
+  let diags;
+  try {
+    diags = await api('/sessions/' + selectedSessionId + '/diagrams', { query: { active_only: activeOnly, limit: 200 } });
+  } catch (e) { return; }
+  const el = document.getElementById('diag-list');
+  el.innerHTML = '';
+  for (const d of diags) {
+    const row = document.createElement('div');
+    row.className = 'list-item diagram-list-item';
+    row.innerHTML = `<span class="type-badge">${escapeHtml(d.type)}</span> `
+      + `<span class="pill ${d.is_active ? 'active' : 'superseded'}">${d.is_active ? 'active' : 'superseded'}</span>`;
+    row.onclick = () => showDiagramDetail(d.id);
+    el.appendChild(row);
+  }
+}
+
+async function showDiagramDetail(id) {
+  let d;
+  try { d = await api('/diagrams/' + id); } catch (e) { return; }
+  const el = document.getElementById('diag-detail');
+  el.innerHTML = '';
+  const meta = document.createElement('div');
+  meta.className = 'dim';
+  meta.textContent = `id=${d.id}  type=${d.type}  requirement_ids=${JSON.stringify(d.requirement_ids)}`;
+  el.appendChild(meta);
+  const mermaidOut = document.createElement('div');
+  mermaidOut.id = 'mermaid-out';
+  el.appendChild(mermaidOut);
+  if (d.mermaid) renderMermaidInto(mermaidOut, d.mermaid);
+  else mermaidOut.innerHTML = '<span class="dim">(no mermaid source)</span>';
+  const toggleBtn = makeButton('Show raw mermaid source', null, () => srcPre.classList.toggle('hidden'));
+  el.appendChild(toggleBtn);
+  const srcPre = document.createElement('pre');
+  srcPre.className = 'hidden';
+  srcPre.textContent = d.mermaid || '(none)';
+  el.appendChild(srcPre);
+}
+
+let mermaidCounter = 0;
+async function renderMermaidInto(el, source) {
+  try {
+    if (window.mermaid && !window.mermaid.__initialized) {
+      window.mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+      window.mermaid.__initialized = true;
+    }
+    const id = 'mmd-' + (mermaidCounter++);
+    const { svg } = await window.mermaid.render(id, source);
+    el.innerHTML = svg;
+  } catch (e) {
+    el.innerHTML = '<span style="color: var(--err)">mermaid render failed: ' + escapeHtml(String(e)) + '</span>';
+  }
+}
+
+// ── trace panel ──────────────────────────────────────────────────────────────
+function recordTraceEvent(ev) {
+  traceEvents.push(ev);
+  renderTracePanel();
+}
+
+function renderTracePanel() {
+  document.getElementById('trace-count').textContent = traceEvents.length ? `(${traceEvents.length} events)` : '';
+  const panel = document.getElementById('tracepanel');
+  if (panel.classList.contains('hidden')) return;
+  panel.innerHTML = '';
+  for (const ev of traceEvents) {
+    const row = document.createElement('div');
+    row.className = 'trace-row';
+    const indent = '  '.repeat(ev.layer || 0);
+    row.textContent = `${ev.seq} | L${ev.layer ?? '-'} | ${indent}${ev.node ?? '-'} | ${ev.phase} | ${ev.duration_ms ?? ''}`;
+    const dataEl = document.createElement('div');
+    dataEl.className = 'trace-data hidden';
+    dataEl.textContent = JSON.stringify(ev.data, null, 2);
+    row.onclick = () => dataEl.classList.toggle('hidden');
+    panel.appendChild(row);
+    panel.appendChild(dataEl);
+  }
+}
+
+document.getElementById('btn-trace-toggle').onclick = () => {
+  const panel = document.getElementById('tracepanel');
+  panel.classList.toggle('hidden');
+  document.getElementById('btn-trace-toggle').textContent = panel.classList.contains('hidden') ? 'show panel' : 'hide panel';
+  renderTracePanel();
+};
+document.getElementById('btn-trace-clear').onclick = () => { traceEvents = []; renderTracePanel(); };
+
+// ── boot ──────────────────────────────────────────────────────────────────
+(async function boot() {
+  updateAuthUI();
+  if (token) {
+    await loadMe();
+    if (currentUser) await refreshProjects();
+    else setToken(null);
+  }
+})();
+</script>
+</body>
+</html>
