@@ -20,6 +20,7 @@ import uuid
 
 from app.chat import run_lock
 from app.chat.node_layers import attribute_layer
+from app.chat.pending import get_pending_interrupt
 from app.chat.trace import ALLOW_FULL_NODES, TraceEmitter, full_disclosure_data, llm_call_metadata, summarize_output
 from app.logging import get_logger
 from supervisor.streaming_tags import TOKEN_STREAM_TAG
@@ -52,11 +53,17 @@ def _prompt_length(chat_model_start_data: dict) -> int | None:
 
 
 async def run_turn(
-    graph, config: dict, session_id: uuid.UUID, turn_id: str, user_input: str, queue, trace: TraceEmitter
+    graph, config: dict, session_id: uuid.UUID, turn_id: str, graph_input, queue, trace: TraceEmitter
 ) -> None:
-    """Drives one graph turn to completion (normal end OR interrupt), pushing
+    """Drives one graph run to completion (normal end OR interrupt), pushing
     formatted SSE strings onto `queue`. ALWAYS releases the run_lock and pushes the
     STREAM_DONE sentinel in its finally block, regardless of outcome.
+
+    `graph_input` is EITHER a fresh turn's input dict ({"user_input": ..., "session_id":
+    ...}, from POST /turn) OR a `Command(resume=<validated payload>)` (from POST
+    /resume, T6b Step 4) -- astream_events() accepts either identically; everything
+    below (token/status/trace handling, interrupt/done detection) is IDENTICAL for
+    both, since resuming re-enters the SAME graph and produces the SAME event shapes.
     """
     # run_id -> (start_perf_counter, prompt_length | None); only populated when
     # trace.enabled, and only for run_ids belonging to a recognized node -- see the
@@ -69,9 +76,7 @@ async def run_turn(
 
         current_answer_text = ""
 
-        async for event in graph.astream_events(
-            {"user_input": user_input, "session_id": session_id}, config, version="v2"
-        ):
+        async for event in graph.astream_events(graph_input, config, version="v2"):
             kind = event.get("event")
 
             if kind == "on_parser_stream" and TOKEN_STREAM_TAG in (event.get("tags") or []):
@@ -155,11 +160,11 @@ async def run_turn(
                 continue
 
         snapshot = await graph.aget_state(config)
-        interrupts = [i for task in snapshot.tasks for i in (task.interrupts or ())]
+        pending = await get_pending_interrupt(graph, config, snapshot=snapshot)
         light_refs = (snapshot.values or {}).get("results") or []
 
-        if interrupts:
-            payload = interrupts[0].value
+        if pending is not None:
+            payload = pending.value
             pattern = payload.get("pattern") or payload.get("type") or "unknown"
             if trace.enabled:
                 # Same payload the frozen `interrupt` event carries -- already
