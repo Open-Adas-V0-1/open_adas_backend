@@ -1,8 +1,8 @@
-"""Chat turn endpoint (T6b Step 3a) -- POST /sessions/{session_id}/turn, an SSE
-stream over the existing, UNCHANGED Layer-1/2/3 LangGraph system. This route wraps
-the graph; it does not alter its behavior (the one graph touch this step made --
-tagging top_level_supervisor's hub-answer call for token attribution -- is
-behavior-preserving, verified against the full real-model e2e suite).
+"""Chat turn endpoint (T6b Step 3a, extended in Step 3b) -- POST
+/sessions/{session_id}/turn, an SSE stream over the existing, UNCHANGED Layer-1/2/3
+LangGraph system. This route wraps the graph; it does not alter its behavior (the one
+graph touch Step 3a made -- tagging top_level_supervisor's hub-answer call for token
+attribution -- is behavior-preserving, verified against the full real-model e2e suite).
 
 Event contract (frozen -- the frontend is built on this):
   turn_started -> {session_id, turn_id}
@@ -11,6 +11,13 @@ Event contract (frozen -- the frontend is built on this):
   interrupt    -> {pattern, payload}                full confirmation pattern; stream ENDS after this
   done         -> {status: "completed"|"interrupted", light_refs: [...]}
   error        -> {message}                         generic message only
+
+Step 3b adds ONE more event, additive only, never altering the above:
+  trace        -> {seq, ts, layer, node, ns, phase, duration_ms?, data}
+Only emitted when BOTH settings.trace_enabled (a hard server-side off-switch) AND the
+`?trace=1` query param are set -- see app/chat/trace.py for the full content-safety
+rule (an explicit node allow-list; artifact-producing nodes get metadata only, never
+their generated text).
 
 Token streaming is an ALLOW-LIST (supervisor/streaming_tags.TOKEN_STREAM_TAG),
 never a deny-list -- see app/chat/turn.py. If a token can't be reliably attributed to
@@ -33,7 +40,9 @@ from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_owned_session, get_supervisor_graph
 from app.chat import run_lock
-from app.chat.turn import STREAM_DONE, run_turn
+from app.chat.trace import QueueTraceSink, TraceEmitter
+from app.chat.turn import STREAM_DONE, _sse, run_turn
+from app.config import get_settings
 from app.logging import get_logger
 from app.schemas.chat import TurnRequest
 from data.models import Session
@@ -65,6 +74,7 @@ def _log_task_result(task: asyncio.Task) -> None:
 @router.post("/sessions/{session_id}/turn")
 async def create_turn(
     payload: TurnRequest,
+    trace: int = 0,
     session_row: Session = Depends(get_owned_session),
     graph=Depends(get_supervisor_graph),
 ) -> StreamingResponse:
@@ -89,7 +99,13 @@ async def create_turn(
 
     turn_id = str(uuid.uuid4())
     queue: asyncio.Queue = asyncio.Queue()
-    task = asyncio.create_task(run_turn(graph, config, session_id, turn_id, payload.message, queue))
+
+    trace_on = bool(trace) and get_settings().trace_enabled
+    trace_emitter = TraceEmitter(
+        sinks=[QueueTraceSink(queue, _sse)] if trace_on else [], enabled=trace_on
+    )
+
+    task = asyncio.create_task(run_turn(graph, config, session_id, turn_id, payload.message, queue, trace_emitter))
     task.add_done_callback(_log_task_result)
 
     logger.info("chat.turn_started", session_id=str(session_id), turn_id=turn_id)

@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60
 
+    # ── Chat execution trace channel (T6b Step 3b) ──
+    # Hard off-switch, independent of the per-request ?trace=1 query param: even if a
+    # client asks for it, no trace event is ever built or emitted unless this is true.
+    trace_enabled: bool = False
+
     @property
     def database_url(self) -> str:
         return (
