@@ -41,6 +41,16 @@ class MiddleDecision(BaseModel):
     resolved_intent: Intent | None = Field(
         default=None, description="Set only when has_request is True."
     )
+    level: RequirementLevel | None = Field(
+        default=None,
+        description=(
+            "operational|functional|physical — the level the user is asking about, only "
+            "when explicit or clearly implied. Leave unset to default to functional. Only "
+            "meaningful when resolved_intent creates/modifies a requirement — resolve_level "
+            "enforces the sequential ordering (operational -> functional -> physical) "
+            "deterministically from this, it does not guess the ordering itself."
+        ),
+    )
     diagram_type: DiagramType | None = Field(
         default=None, description="Only set when resolved_intent concerns a diagram and the type is stated."
     )

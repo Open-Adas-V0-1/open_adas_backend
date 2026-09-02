@@ -1,4 +1,5 @@
 from langchain_core.language_models import BaseChatModel
+from langchain_core.output_parsers import PydanticOutputParser
 
 from app.config import Settings, get_node_llm_config, get_settings
 from app.logging import get_logger
@@ -11,6 +12,17 @@ logger = get_logger(__name__)
 
 # gpt, ollama and capgemini all speak the OpenAI-compatible API; only base_url differs.
 OPENAI_COMPATIBLE_BACKENDS = {"gpt", "ollama", "capgemini"}
+
+# Backends whose gateway was found (Layer-1 rebuild, Step 6 full integration run) NOT to
+# honor LangChain's default with_structured_output() mechanism against gpt-4o-class
+# models: the strict json_schema response_format is silently ignored (the model just
+# free-texts a fenced, differently-shaped JSON blob instead), and method="function_calling"
+# 500s outright (the gateway rejects a targeted tool_choice, only accepting "none"/"auto").
+# method="json_mode" (response_format={"type": "json_object"} + the schema folded into the
+# prompt, same mechanism every OpenAI-compatible gateway is expected to support) verified
+# working end-to-end against this gateway. Scoped to the backend(s) this was actually
+# observed against, not applied speculatively to gpt/ollama.
+_JSON_MODE_ONLY_BACKENDS = {"capgemini"}
 
 _client_cache: dict[tuple[str, str], BaseChatModel] = {}
 
@@ -76,6 +88,43 @@ def get_llm(node_name: str | None = None) -> BaseChatModel:
     # to shadow invoke/ainvoke with their retry-wrapped versions.
     object.__setattr__(client, "invoke", retry_decorator(client.invoke))
     object.__setattr__(client, "ainvoke", retry_decorator(client.ainvoke))
+
+    if backend in _JSON_MODE_ONLY_BACKENDS:
+        original_with_structured_output = client.with_structured_output
+
+        def _with_structured_output(schema, **kwargs):
+            kwargs.setdefault("method", "json_mode")
+            structured = original_with_structured_output(schema, **kwargs)
+            if kwargs["method"] == "json_mode":
+                # json_mode (unlike the strict json_schema/function_calling methods) is
+                # response_format={"type": "json_object"} ONLY -- LangChain does not
+                # auto-inject the target schema into the prompt for it (that's the
+                # caller's documented responsibility). Every prompt in this repo was
+                # written assuming the API itself enforces required fields/types, so
+                # without this the model silently drops fields (observed: PlanDecision's
+                # required tasks[].description). Append the schema's own format
+                # instructions to whatever string prompt each node already builds --
+                # same fix, in the one place json_mode is turned on, not per node.
+                format_instructions = PydanticOutputParser(pydantic_object=schema).get_format_instructions()
+                original_ainvoke = structured.ainvoke
+                original_invoke = structured.invoke
+
+                def _prepend(prompt):
+                    if isinstance(prompt, str):
+                        return f"{prompt}\n\n{format_instructions}"
+                    return prompt
+
+                async def _ainvoke(prompt, *args, **kw):
+                    return await original_ainvoke(_prepend(prompt), *args, **kw)
+
+                def _invoke(prompt, *args, **kw):
+                    return original_invoke(_prepend(prompt), *args, **kw)
+
+                object.__setattr__(structured, "ainvoke", _ainvoke)
+                object.__setattr__(structured, "invoke", _invoke)
+            return structured
+
+        object.__setattr__(client, "with_structured_output", _with_structured_output)
 
     _client_cache[cache_key] = client
     return client

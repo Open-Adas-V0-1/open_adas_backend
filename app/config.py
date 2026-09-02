@@ -62,6 +62,23 @@ class Settings(BaseSettings):
     checkpoint_encryption_key: str | None = None
     checkpoint_durability: str = "async"  # sync | async | exit
 
+    # ── SysML single-processing (Layer 3) guards ──
+    sysml_proc_max_visits: int = 5
+    sysml_proc_recursion_limit: int = 25
+
+    # ── SysML v2 tooling (daltskin/sysml-v2-lsp) ──
+    sysml_node_bin: str = "node"
+    sysml_lsp_server_path: str | None = None  # defaults to tools/sysml_v2/node_modules/.../server.js
+    sysml_mcp_server_path: str | None = None  # defaults to tools/sysml_v2/node_modules/.../mcpServer.js
+    sysml_tooling_timeout: float = 30.0
+
+    # ── SysML processing thread TTL (checkpointer state only, never approved artifacts) ──
+    sysml_thread_ttl_days: int = 30
+
+    # ── Memory optimization guard (Layer-1 rebuild, Step 5) ──
+    memory_opt_threshold_ratio: float = 0.8
+    memory_short_term_budget_tokens: int = 8000
+
     @property
     def database_url(self) -> str:
         return (

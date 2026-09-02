@@ -5,31 +5,99 @@ from langgraph.graph import END
 from langgraph.types import interrupt
 
 from agents.sysml.state import SysmlState
+from agents.sysml.tools import to_mermaid, validate
+from app.config import get_settings
 from app.schemas.sysml import Intent, IntentDecision
 from data.db import async_session_factory
-from data.models import DiagramType, RequirementLevel, VersionStatus
-from data.repository import DiagramRepo, PublishedRequirementRepo, RequirementRepo
+from data.models import DiagramType, RequirementLevel
+from data.repository import DiagramRepo, RequirementRepo
 from llm.factory import get_llm
 from llm.prompts import load_prompt
+from skills.loader import get_error_help, get_patterns, get_syntax, match
 
-# Which generator a "regenerate" decision routes back to, keyed by source_node.
-SOURCE_NODE_MAP = {
-    "requirement": "generate_requirement",
-    "diagram": "generate_diagram",
-    "delta": "apply_published_delta",
+_GENERATE_TARGETING_INTENTS = {
+    Intent.generate_requirement.value,
+    Intent.modify_requirement.value,
+    Intent.generate_diagram.value,
+    Intent.modify_diagram.value,
 }
+_DIAGRAM_INTENTS = {Intent.generate_diagram.value, Intent.modify_diagram.value}
 
 
-def _regeneration_tracking(state: SysmlState) -> dict:
-    """Shared by every generator node: bump regeneration_count and remember the
-    feedback that produced THIS draft, only when this call was actually a regenerate
-    (i.e. feedback was present). Feeds the approved-artifact metadata at stockage time.
+def _coverage_gaps(text: str, source_node: str | None, diagram_type: str | None) -> list[str]:
+    """Deterministic structural check: did generation actually produce the elements the
+    request needed, distinct from the tool's syntax/semantic diagnostics.
     """
-    incoming_feedback = state.get("feedback")
-    return {
-        "last_feedback": incoming_feedback if incoming_feedback else state.get("last_feedback"),
-        "regeneration_count": (state.get("regeneration_count") or 0) + (1 if incoming_feedback else 0),
-    }
+    gaps: list[str] = []
+    if source_node == "requirement":
+        if "requirement def" not in text:
+            gaps.append("Missing a 'requirement def' block.")
+        if "subject" not in text:
+            gaps.append("Missing a 'subject' declaration.")
+        if "require constraint" not in text:
+            gaps.append("Missing at least one 'require constraint'.")
+    elif source_node == "diagram":
+        keyword_map = {
+            "use_case": ["part def", "part "],
+            "state_machine": ["state def", "state "],
+            "sequence": ["part def", "action def"],
+        }
+        keywords = keyword_map.get(diagram_type, ["part def"])
+        if not any(k in text for k in keywords):
+            gaps.append(
+                f"Missing expected structural elements for diagram_type={diagram_type!r} "
+                f"(looked for any of {keywords})."
+            )
+    return gaps
+
+
+def _format_diagnostics(diagnostics: list[dict]) -> str:
+    if not diagnostics:
+        return "(none)"
+    return "\n".join(
+        f"- [{d.get('severity')}] line {d.get('line')}, col {d.get('column')}: {d.get('message')}"
+        for d in diagnostics
+    )
+
+
+def _skill_match_query(state: SysmlState) -> str:
+    """Query used at Level 2 (match against name+description) to find which
+    procedural-memory skill(s) are relevant to this generation task.
+    """
+    source_node = state.get("source_node") or "requirement"
+    level = state.get("level", "functional")
+    diagram_type = (state.get("diagram_type") or "").replace("_", " ")
+    parts = ["SysML v2 systems modeling", level, source_node, diagram_type, state.get("user_input", "")]
+    return " ".join(p for p in parts if p)
+
+
+def _skill_reference_query(state: SysmlState) -> str:
+    """Query used at Level 3 (section-level retrieval) — narrower than the Level 2
+    match query, aimed at the specific construct being generated.
+    """
+    source_node = state.get("source_node") or "requirement"
+    if source_node == "diagram":
+        diagram_type = (state.get("diagram_type") or "part").replace("_", " ")
+        return f"{diagram_type} definition"
+    return "requirement subject constraint"
+
+
+def _skill_guidance(state: SysmlState) -> str:
+    """Progressive disclosure in action: Level 2 match() picks the relevant skill(s),
+    then Level 3 get_syntax()/get_patterns() pull ONLY the section(s) relevant to what
+    is being generated right now — never a whole reference file.
+    """
+    matched = match(_skill_match_query(state), max_skills=2)
+    if not matched:
+        return ""
+
+    ref_query = _skill_reference_query(state)
+    blocks: list[str] = []
+    for skill in matched:
+        syntax = get_syntax(ref_query, skill_name=skill.meta.name)
+        patterns = get_patterns(ref_query, skill_name=skill.meta.name)
+        blocks.extend(b for b in (syntax, patterns) if b)
+    return "\n\n".join(blocks)
 
 
 async def sysml_supervisor(state: SysmlState) -> dict:
@@ -48,141 +116,179 @@ async def sysml_supervisor(state: SysmlState) -> dict:
 
 def route_from_supervisor(state: SysmlState) -> str:
     intent = state.get("intent")
-    if intent in (Intent.generate_requirement.value, Intent.modify_requirement.value):
-        return "generate_requirement"
-    if intent in (Intent.generate_diagram.value, Intent.modify_diagram.value):
-        return "guard_requirement_available"
-    if intent == Intent.apply_published_delta.value:
-        return "apply_published_delta"
-    # fail-open: no_action and conversation end gracefully instead of crashing the graph.
+    if intent in _GENERATE_TARGETING_INTENTS:
+        return "plan_node"
+    if intent == Intent.conversation.value:
+        return "contextual_answer"
+    # fail-open: no_action, apply_published_delta (not built in this layer), and any
+    # unrecognized intent end gracefully instead of crashing the graph.
     return END
 
 
-async def generate_requirement(state: SysmlState) -> dict:
-    llm = get_llm("sysml_generate_requirement")
-    prompt = load_prompt(
-        "sysml/generate_requirement.md",
-        level=state.get("level", "functional"),
-        user_input=state.get("user_input", ""),
-        previous_draft=state.get("draft_requirement") or "(none)",
-        feedback=state.get("feedback") or "(none)",
-    )
+async def plan_node(state: SysmlState) -> dict:
+    """Plans the structure BEFORE generating (never writes SysML syntax itself)."""
+    level = state.get("level", "functional")
+    is_diagram = state.get("intent") in _DIAGRAM_INTENTS
+    source_node = "diagram" if is_diagram else "requirement"
 
-    response = await llm.ainvoke(prompt)
-
-    return {
-        "draft_requirement": response.content,
-        "source_node": "requirement",
-        "feedback": None,
-        **_regeneration_tracking(state),
-    }
-
-
-async def apply_published_delta(state: SysmlState) -> dict:
-    published_id = state.get("selected_published_requirement_id")
-    if not published_id:
-        raise ValueError("apply_published_delta requires state['selected_published_requirement_id']")
-
-    async with async_session_factory() as db:
-        published = await PublishedRequirementRepo.get_by_id(
-            db, id=uuid.UUID(str(published_id)), session_id=state["session_id"]
-        )
-    if published is None:
-        raise ValueError(
-            f"Published requirement {published_id} not found in session {state['session_id']}"
-        )
-
-    llm = get_llm("sysml_apply_published_delta")
-    prompt = load_prompt(
-        "sysml/apply_published_delta.md",
-        level=state.get("level", "functional"),
-        published_content=published.content,
-        current_draft=state.get("draft_requirement") or "(none)",
-        feedback=state.get("feedback") or "(none)",
-    )
-
-    response = await llm.ainvoke(prompt)
-
-    return {
-        "draft_requirement": response.content,
-        "source_node": "delta",
-        "feedback": None,
-        # keep provenance across regenerate loops
-        "selected_published_requirement_id": str(published.id),
-        **_regeneration_tracking(state),
-    }
-
-
-async def guard_requirement_available(state: SysmlState) -> dict:
-    """Router-as-code, not an LLM node: validates the SPECIFIC target requirement this
-    processing was given (resolved upstream by the middle layer), not "does any
-    requirement exist" in the session.
-    """
+    source_text = state.get("source_requirement_content")
     target_id = state.get("target_requirement_id")
-    if not target_id:
-        return {"requirement_valid": False, "resolved_requirement_content": None}
+    if source_text is None and target_id:
+        async with async_session_factory() as db:
+            requirement = await RequirementRepo.get_by_id(
+                db, id=uuid.UUID(str(target_id)), session_id=state["session_id"]
+            )
+        if requirement is None:
+            raise ValueError(
+                f"target_requirement_id {target_id} not found in session {state['session_id']}"
+            )
+        source_text = requirement.content
 
-    async with async_session_factory() as db:
-        requirement = await RequirementRepo.get_by_id(
-            db, id=uuid.UUID(str(target_id)), session_id=state["session_id"]
+    if is_diagram and target_id is None:
+        raise ValueError(
+            "A diagram must target an existing requirement (target_requirement_id); "
+            "the middle layer is responsible for resolving it before dispatching here."
         )
 
-    if requirement is None or requirement.status == VersionStatus.rejected:
-        return {"requirement_valid": False, "resolved_requirement_content": None}
+    # plan_node runs before generate_node's source_node/diagram_type would normally be
+    # set for _skill_guidance's lookup, so build the query from what we already know.
+    skill_guidance = _skill_guidance({**state, "source_node": source_node})
 
-    return {"requirement_valid": True, "resolved_requirement_content": requirement.content}
-
-
-def route_from_guard(state: SysmlState) -> str:
-    return "generate_diagram" if state.get("requirement_valid") else "message_no_requirement"
-
-
-async def generate_diagram(state: SysmlState) -> dict:
-    llm = get_llm("sysml_generate_diagram")
+    llm = get_llm("sysml_plan")
     prompt = load_prompt(
-        "sysml/generate_diagram.md",
-        diagram_type=state.get("diagram_type") or "use_case",
-        requirement_content=state.get("resolved_requirement_content") or "(unknown)",
-        previous_draft=state.get("draft_diagram") or "(none)",
-        feedback=state.get("feedback") or "(none)",
+        "sysml/plan.md",
+        level=level,
+        target=source_node,
+        diagram_type=state.get("diagram_type") or "n/a",
+        user_input=state.get("user_input", ""),
+        source_text=source_text or "(none)",
+        skill_guidance=skill_guidance or "(no matching skill guidance found)",
     )
-
     response = await llm.ainvoke(prompt)
 
     return {
-        "draft_diagram": response.content,
-        "source_node": "diagram",
-        "feedback": None,
-        **_regeneration_tracking(state),
+        "plan": {"structure": response.content, "level": level, "target": source_node},
+        "source_node": source_node,
+        "source_requirement_content": source_text,
+        "verify_visits": 0,  # fresh generate/verify round starts here
+        "verify_warning": None,
     }
 
 
-async def message_no_requirement(state: SysmlState) -> dict:
-    """Contextual LLM reply — not a static string."""
-    llm = get_llm("sysml_message_no_requirement")
-    prompt = load_prompt(
-        "sysml/message_no_requirement.md",
-        user_input=state.get("user_input", ""),
-        diagram_type=state.get("diagram_type") or "unspecified",
-    )
+async def generate_node(state: SysmlState) -> dict:
+    level = state.get("level", "functional")
+    if level not in ("operational", "functional", "physical"):
+        level = "functional"
 
+    diagnostics = state.get("verify_diagnostics") or []
+    coverage_gaps = state.get("verify_coverage_gaps") or []
+    feedback = state.get("feedback")
+
+    verify_feedback_text = "(none)"
+    if diagnostics or coverage_gaps or feedback:
+        # Skill-sourced fix guidance for exactly the diagnostics we got back — this is
+        # what should shorten the verify loop: regeneration applies the documented fix
+        # instead of guessing again.
+        skill_error_help = get_error_help(diagnostics) if diagnostics else ""
+        verify_feedback_text = load_prompt(
+            "sysml/verify_feedback.md",
+            diagnostics=_format_diagnostics(diagnostics),
+            coverage_gaps="\n".join(f"- {g}" for g in coverage_gaps) or "(none)",
+            human_feedback=feedback or "(none)",
+            skill_error_help=skill_error_help or "(no matching documented fix found)",
+        )
+
+    skill_guidance = _skill_guidance(state)
+
+    llm = get_llm("sysml_generate")
+    prompt = load_prompt(
+        f"sysml/generate_{level}.md",
+        target=state.get("source_node", "requirement"),
+        diagram_type=state.get("diagram_type") or "n/a",
+        user_input=state.get("user_input", ""),
+        plan=(state.get("plan") or {}).get("structure", ""),
+        source_text=state.get("source_requirement_content") or "(none)",
+        previous_draft=state.get("draft_sysml") or "(none)",
+        verify_feedback=verify_feedback_text,
+        skill_guidance=skill_guidance or "(no matching skill guidance found)",
+    )
     response = await llm.ainvoke(prompt)
 
-    return {"no_requirement_message": response.content, "result": "no_requirement"}
+    return {
+        "draft_sysml": response.content,
+        "verify_visits": (state.get("verify_visits") or 0) + 1,
+        "feedback": None,
+    }
+
+
+async def verify_node(state: SysmlState) -> dict:
+    """Automatic verification: LSP diagnostics, coverage analysis, and (for diagrams)
+    Mermaid derivation. Iterates the caller toward CLEAN — see route_from_verify.
+    """
+    text = state.get("draft_sysml") or ""
+    source_node = state.get("source_node")
+
+    diagnostics = await validate(text)
+    diagnostic_dicts = [d.to_dict() for d in diagnostics]
+
+    coverage_gaps = _coverage_gaps(text, source_node, state.get("diagram_type"))
+
+    mermaid = None
+    if source_node == "diagram" and not diagnostic_dicts:
+        # Only attempt Mermaid derivation once the model text is at least syntactically
+        # sound — deriving from broken SysML text isn't a meaningful signal either way.
+        try:
+            mermaid = await to_mermaid(text)
+        except Exception as exc:
+            coverage_gaps = [*coverage_gaps, f"Mermaid generation failed: {exc}"]
+
+    clean = not diagnostic_dicts and not coverage_gaps
+
+    result: dict = {
+        "verify_diagnostics": diagnostic_dicts,
+        "verify_coverage_gaps": coverage_gaps,
+        "verify_clean": clean,
+    }
+    if mermaid is not None:
+        result["draft_mermaid"] = mermaid
+
+    visits = state.get("verify_visits") or 0
+    max_visits = get_settings().sysml_proc_max_visits
+    if not clean and visits >= max_visits:
+        result["verify_warning"] = (
+            f"Automatic verification did not reach a clean result after {visits} attempt(s); "
+            "handing to human review with the remaining diagnostics below."
+        )
+    else:
+        result["verify_warning"] = None
+
+    return result
+
+
+def route_from_verify(state: SysmlState) -> str:
+    if state.get("verify_clean"):
+        return "requirement_review"
+    visits = state.get("verify_visits") or 0
+    if visits >= get_settings().sysml_proc_max_visits:
+        # fail-open: verify_node has already attached verify_warning to state.
+        return "requirement_review"
+    return "generate_node"
 
 
 def requirement_review(state: SysmlState) -> dict:
     # No DB writes above this line — this node re-runs from the top on resume.
-    source = state.get("source_node")
-    draft = state.get("draft_diagram") if source == "diagram" else state.get("draft_requirement")
-
     decision = interrupt(
         {
             "type": "requirement_review",
-            "source_node": source,
-            "draft": draft,
+            "source_node": state.get("source_node"),
+            "draft": state.get("draft_sysml"),
+            "mermaid": state.get("draft_mermaid"),
             "level": state.get("level", "functional"),
             "diagram_type": state.get("diagram_type"),
+            "verify_clean": state.get("verify_clean"),
+            "verify_diagnostics": state.get("verify_diagnostics"),
+            "verify_warning": state.get("verify_warning"),
+            "contextual_answer_text": state.get("contextual_answer_text"),
         }
     )
 
@@ -196,9 +302,9 @@ def requirement_review(state: SysmlState) -> dict:
 def route_from_review(state: SysmlState) -> str:
     decision = state.get("review_decision")
     if decision == "approve":
-        return "stockage_output"
+        return "finalize"
     if decision == "regenerate":
-        return SOURCE_NODE_MAP.get(state.get("source_node"), END)
+        return "plan_node"
     if decision == "question":
         return "contextual_answer"
     # fail-open: unrecognized/failed decision ends gracefully rather than crashing.
@@ -206,111 +312,70 @@ def route_from_review(state: SysmlState) -> str:
 
 
 async def contextual_answer(state: SysmlState) -> dict:
-    """Answers a question raised DURING review, using live context. Strictly
-    READ-ONLY: no DB writes, no persistence, no side effects. Routes back to review.
+    """Answers a question raised during (or in place of) review, using live context.
+    Strictly READ-ONLY: no DB writes, no persistence, no side effects. Routes to review.
     """
-    source = state.get("source_node")
-    draft = state.get("draft_diagram") if source == "diagram" else state.get("draft_requirement")
-
     llm = get_llm("sysml_contextual_answer")
     prompt = load_prompt(
         "sysml/contextual_answer.md",
         level=state.get("level", "functional"),
-        current_draft=draft or "(none)",
-        user_question=state.get("question") or "",
+        current_draft=state.get("draft_sysml") or "(none)",
+        user_question=state.get("question") or state.get("user_input", ""),
     )
-
     response = await llm.ainvoke(prompt)
-
     return {"contextual_answer_text": response.content, "question": None}
 
 
-def _summarize(text: str, limit: int = 200) -> str:
-    text = " ".join(text.split())
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
-
-
-async def stockage_output(state: SysmlState) -> dict:
-    source = state.get("source_node")
+async def finalize(state: SysmlState) -> dict:
+    """Persists the APPROVED artifact keyed by (session_id == thread_id, level). No
+    active/superseded semantics — levels accumulate rather than superseding each other.
+    """
+    source_node = state.get("source_node")
+    level = RequirementLevel(state.get("level", "functional"))
     approved_at = datetime.now(timezone.utc).isoformat()
-    regeneration_count = state.get("regeneration_count") or 0
-    final_feedback = state.get("last_feedback")
+
+    metadata = {
+        "artifact_type": "diagram" if source_node == "diagram" else "requirement",
+        "level": level.value,
+        "verify_clean_at_approval": state.get("verify_clean"),
+        "verify_diagnostics_at_approval": state.get("verify_diagnostics") or [],
+        "regeneration_rounds": state.get("verify_visits") or 0,
+        "final_feedback": state.get("feedback"),
+        "approved_at": approved_at,
+    }
 
     async with async_session_factory() as db:
-        if source == "diagram":
-            diagram_type_value = state.get("diagram_type") or "use_case"
-            metadata = {
-                "artifact_type": "diagram",
-                "level": state.get("level", "functional"),
-                "source_node": source,
-                "source_published_id": None,
-                "regeneration_count": regeneration_count,
-                "final_feedback": final_feedback,
-                "summary": f"{diagram_type_value} diagram",
-                "approved_at": approved_at,
-            }
-            diagram = await DiagramRepo.create(
+        if source_node == "diagram":
+            diagram = await DiagramRepo.finalize(
                 db,
                 session_id=state["session_id"],
                 requirement_id=uuid.UUID(str(state["target_requirement_id"])),
-                type=DiagramType(diagram_type_value),
-                plantuml=state["draft_diagram"],
+                type=DiagramType(state.get("diagram_type") or "use_case"),
+                sysml_text=state["draft_sysml"],
+                mermaid=state.get("draft_mermaid"),
                 metadata=metadata,
             )
             await db.commit()
-            return {"persisted_diagram_id": str(diagram.id)}
+            # active_diagram_id is a compatibility alias: the middle layer's wrapper
+            # (Layer 2, out of scope here) reads this key name to build its light
+            # reference. finalize() has no active/superseded semantics of its own —
+            # this is just the id of the row just written, which is always active.
+            return {
+                "persisted_diagram_id": str(diagram.id),
+                "active_diagram_id": str(diagram.id),
+                "result": "finalized",
+            }
 
-        provenance_id = None
-        source_published_id_str = None
-        if source == "delta" and state.get("selected_published_requirement_id"):
-            provenance_id = uuid.UUID(str(state["selected_published_requirement_id"]))
-            source_published_id_str = str(provenance_id)
-
-        content = state["draft_requirement"]
-        metadata = {
-            "artifact_type": "requirement",
-            "level": state.get("level", "functional"),
-            "source_node": source,
-            "source_published_id": source_published_id_str,
-            "regeneration_count": regeneration_count,
-            "final_feedback": final_feedback,
-            "summary": _summarize(content),
-            "approved_at": approved_at,
-        }
-
-        requirement = await RequirementRepo.create(
+        requirement = await RequirementRepo.finalize(
             db,
             session_id=state["session_id"],
-            content=content,
-            level=RequirementLevel(state.get("level", "functional")),
-            source_published_requirement_id=provenance_id,
+            content=state["draft_sysml"],
+            level=level,
             metadata=metadata,
         )
         await db.commit()
-        return {"persisted_requirement_id": str(requirement.id)}
-
-
-def route_from_stockage(state: SysmlState) -> str:
-    return "promote_requirement"
-
-
-async def promote_requirement(state: SysmlState) -> dict:
-    source = state.get("source_node")
-
-    async with async_session_factory() as db:
-        if source == "diagram":
-            promoted = await DiagramRepo.promote(
-                db,
-                id=uuid.UUID(str(state["persisted_diagram_id"])),
-                session_id=state["session_id"],
-            )
-            await db.commit()
-            return {"result": "promoted", "active_diagram_id": str(promoted.id)}
-
-        promoted = await RequirementRepo.promote(
-            db,
-            id=uuid.UUID(str(state["persisted_requirement_id"])),
-            session_id=state["session_id"],
-        )
-        await db.commit()
-        return {"result": "promoted", "active_requirement_id": str(promoted.id)}
+        return {
+            "persisted_requirement_id": str(requirement.id),
+            "active_requirement_id": str(requirement.id),
+            "result": "finalized",
+        }

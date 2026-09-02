@@ -23,16 +23,22 @@ decide only "is there work to dispatch", not the fine-grained action.
    candidate's id EXACTLY as given. If it's unclear which candidate is meant, or none is
    given, leave named_requirement_id unset — do NOT guess. Ambiguity resolution among
    multiple candidates happens deterministically elsewhere, not by you guessing.
+7. If resolved_intent creates/modifies a requirement, set `level` to operational,
+   functional, or physical when the user states or clearly implies it (e.g. "high-level
+   need" -> operational, "physical constraint"/"interface"/"material" -> physical). Leave
+   it unset when unclear — a downstream deterministic step handles the default and
+   enforces valid ordering; you only report what the user actually said.
 
 # Standards
 - Prefer has_request = false over guessing when the request is ambiguous.
 - Keep the clarifying message short (one sentence).
 - Never fabricate a resolved_intent when has_request is false.
 - Never fabricate or guess a named_requirement_id — only set it when truly unambiguous.
+- Never fabricate a level — leave it unset rather than guess.
 
 # Outcome
 A single structured `MiddleDecision`: has_request, optional resolved_intent, optional
-diagram_type, optional named_requirement_id, optional clarifying message.
+level, optional diagram_type, optional named_requirement_id, optional clarifying message.
 
 ## User input
 {{user_input}}

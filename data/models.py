@@ -133,7 +133,10 @@ class Diagram(Base):
     session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"))
     requirement_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("requirements.id", ondelete="CASCADE"))
     type: Mapped[DiagramType] = mapped_column(Enum(DiagramType, name="diagram_type"))
-    plantuml: Mapped[str] = mapped_column(Text)
+    # The generated SysML v2 textual notation for this diagram's model elements — never
+    # authored directly. The Mermaid diagram below is DERIVED from this via the tool.
+    sysml_text: Mapped[str] = mapped_column(Text)
+    mermaid: Mapped[str | None] = mapped_column(Text, default=None)
     rendered_path: Mapped[str | None] = mapped_column(Text, default=None)
     status: Mapped[VersionStatus] = mapped_column(
         Enum(VersionStatus, name="version_status"), default=VersionStatus.pending
@@ -184,3 +187,17 @@ class File(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     session: Mapped["Session"] = relationship(back_populates="files")
+
+
+class ThreadActivity(Base):
+    """Tracks last_accessed for a CHECKPOINTER thread_id (the middle layer's own
+    session-level thread, or a layer-3 per-processing 'proc' thread) — never the
+    approved artifacts. Used for lazy TTL expiry of checkpointer state only; rows here
+    have no bearing on requirements/diagrams, which are permanent regardless of TTL.
+    """
+
+    __tablename__ = "thread_activity"
+
+    thread_id: Mapped[str] = mapped_column(primary_key=True)
+    session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"))
+    last_accessed: Mapped[datetime] = mapped_column(server_default=func.now())

@@ -1,12 +1,21 @@
-"""Standalone test for T6a: full 3-level nesting (top -> middle -> processing) under the
-PRODUCTION AsyncPostgresSaver (encrypted, durability-configured), plus the top-level guard.
+"""SUPERSEDED (as of the Layer-1 rebuild, Step 1) -- kept for reference only, currently
+FAILING and not run as part of any regression sweep.
 
-LLM call sites are stubbed (same rationale as T4/T5: local Ollama models don't reliably
-support LangChain structured-output tool-calling in this environment). Everything else —
-graph wiring, THREE-level nested interrupt/resume bubbling, deterministic per-dispatch
-thread ids, encryption at rest, and persistence via the T2 repository — runs for real.
+This tested T6a's ORIGINAL top-level supervisor: a planner that always dispatched
+(stubbing TopDecision/AgentTarget) and drove full 3-level nesting (top -> middle ->
+processing) on every turn. The Layer-1 rebuild replaces that with top_level_supervisor
+as a HUB that classifies each turn first (simple_response / needs_execution / unclear)
+and only in Step 1 -- there is no dispatch wiring (sysml_middle_node) in the graph yet,
+so this file's scenarios cannot pass until Step 2 rebuilds the needs_execution ->
+planning/delegation path. scripts/smoke_test_supervisor_hub.py covers Step 1's actual
+behavior; scripts/smoke_test_layer2_integration.py covers Layer-2/Layer-3 nesting and
+encryption-at-rest independent of Layer 1. Once Step 2 restores dispatch, this file's
+scenarios should be re-created (with HubDecision-based stubs) rather than resurrected
+as-is.
 
-Run: python -m scripts.smoke_test_t6a
+Original docstring, for context: full 3-level nesting (top -> middle -> processing)
+under the PRODUCTION AsyncPostgresSaver (encrypted, durability-configured), plus the
+top-level guard.
 """
 import asyncio
 import os
@@ -24,10 +33,35 @@ from app.config import get_settings  # noqa: E402
 from app.schemas.sysml import Intent, IntentDecision, MiddleDecision  # noqa: E402
 from app.schemas.supervisor import AgentTarget, TopDecision  # noqa: E402
 from data.db import async_session_factory  # noqa: E402
-from data.models import DiagramType, VersionStatus  # noqa: E402
+from data.models import DiagramType, RequirementLevel, VersionStatus  # noqa: E402
 from data.repository import DiagramRepo, ProjectRepo, RequirementRepo, SessionRepo, UserRepo  # noqa: E402
 from harness.checkpointer import build_production_checkpointer  # noqa: E402
 from supervisor.graph import build_supervisor_config, build_supervisor_graph  # noqa: E402
+
+VALID_REQUIREMENT = (
+    "package BrakingSystem {\n"
+    "    part def Vehicle {\n"
+    "        attribute stoppingDistance : ISQ::LengthValue;\n"
+    "    }\n"
+    "    part vehicle : Vehicle {\n"
+    "        attribute :>> stoppingDistance = 45 [SI::m];\n"
+    "    }\n"
+    "    requirement def StoppingDistanceRequirement {\n"
+    "        doc /* The vehicle shall stop within 50 meters when braking. */\n"
+    "        subject veh : Vehicle;\n"
+    "        require constraint { veh.stoppingDistance <= 50 [SI::m] }\n"
+    "    }\n"
+    "}\n"
+)
+VALID_DIAGRAM_MODEL = (
+    "package BrakeStates {\n"
+    "    part def BrakingController {\n"
+    "        state def Idle;\n"
+    "        state def Braking;\n"
+    "    }\n"
+    "    part controller : BrakingController;\n"
+    "}\n"
+)
 
 
 class FakeMessage:
@@ -107,7 +141,7 @@ async def test_full_nesting_unambiguous():
     print("=" * 70)
     user, session = await setup_user_project_session()
 
-    draft = "The system shall stop within 50 meters."
+    draft = VALID_REQUIREMENT
 
     top_llm = FakeStructuredWrapperLLM(
         [
@@ -115,13 +149,19 @@ async def test_full_nesting_unambiguous():
             TopDecision(active_agent=None, intent_complete=True),
         ]
     )
+    # level=operational so resolve_level (Layer-2's level ordering) admits it
+    # immediately with no source requirement — this scenario's focus is 3-level
+    # nesting, not level ordering (see scripts/smoke_test_level_resolution.py).
     middle_llm = FakeStructuredWrapperLLM(
         [
-            MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement),
+            MiddleDecision(
+                has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational
+            ),
             MiddleDecision(has_request=False, message="Nothing further to process."),
         ]
     )
     layer3_supervisor_llm = FakeStructuredWrapperLLM(IntentDecision(intent=Intent.generate_requirement))
+    plan_llm = FakeSequenceLLM(["Requirement def with subject Vehicle and a stopping-distance constraint."])
     generate_llm = FakeSequenceLLM([draft])
 
     def fake_top_get_llm(node_name=None):
@@ -137,7 +177,9 @@ async def test_full_nesting_unambiguous():
     def fake_layer3_get_llm(node_name=None):
         if node_name == "sysml_supervisor":
             return layer3_supervisor_llm
-        if node_name == "sysml_generate_requirement":
+        if node_name == "sysml_plan":
+            return plan_llm
+        if node_name == "sysml_generate":
             return generate_llm
         raise AssertionError(f"unexpected node_name in layer-3 nodes: {node_name}")
 
@@ -146,7 +188,8 @@ async def test_full_nesting_unambiguous():
     async with build_production_checkpointer() as checkpointer:
         with patch("supervisor.router.get_llm", side_effect=fake_top_get_llm), \
              patch("agents.sysml.middle_nodes.get_llm", side_effect=fake_middle_get_llm), \
-             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm):
+             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm), \
+             patch("agents.sysml.nodes.validate", return_value=[]):
 
             top_graph = build_supervisor_graph(checkpointer=checkpointer)
             config = build_supervisor_config(outer_thread_id)
@@ -221,8 +264,6 @@ async def test_ambiguous_bubbles_through_top():
         req_b = await RequirementRepo.promote(db, id=req_b.id, session_id=session.id)
         await db.commit()
 
-    draft_diagram = "@startuml\nstate Fault\n[*] --> Fault\n@enduml"
-
     top_llm = FakeStructuredWrapperLLM(
         [
             TopDecision(active_agent=AgentTarget.sysml, intent_complete=False),
@@ -239,7 +280,8 @@ async def test_ambiguous_bubbles_through_top():
     layer3_supervisor_llm = FakeStructuredWrapperLLM(
         IntentDecision(intent=Intent.generate_diagram, diagram_type=DiagramType.state_machine)
     )
-    diagram_llm = FakeSequenceLLM([draft_diagram])
+    plan_llm = FakeSequenceLLM(["State machine with Idle and Braking states."])
+    diagram_llm = FakeSequenceLLM([VALID_DIAGRAM_MODEL])
 
     def fake_top_get_llm(node_name=None):
         if node_name == "top_level_supervisor":
@@ -256,7 +298,9 @@ async def test_ambiguous_bubbles_through_top():
     def fake_layer3_get_llm(node_name=None):
         if node_name == "sysml_supervisor":
             return layer3_supervisor_llm
-        if node_name == "sysml_generate_diagram":
+        if node_name == "sysml_plan":
+            return plan_llm
+        if node_name == "sysml_generate":
             return diagram_llm
         raise AssertionError(f"unexpected node_name in layer-3 nodes: {node_name}")
 
@@ -265,7 +309,8 @@ async def test_ambiguous_bubbles_through_top():
     async with build_production_checkpointer() as checkpointer:
         with patch("supervisor.router.get_llm", side_effect=fake_top_get_llm), \
              patch("agents.sysml.middle_nodes.get_llm", side_effect=fake_middle_get_llm), \
-             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm):
+             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm), \
+             patch("agents.sysml.nodes.validate", return_value=[]):
 
             top_graph = build_supervisor_graph(checkpointer=checkpointer)
             config = build_supervisor_config(outer_thread_id)
@@ -275,14 +320,14 @@ async def test_ambiguous_bubbles_through_top():
             )
             assert result_1.get("__interrupt__"), "expected user_confirm_inputs to bubble to the top caller"
             payload_1 = result_1["__interrupt__"][0].value
-            assert payload_1["pattern"] == "select_requirement"
+            assert payload_1["pattern"] == "select_requirements_for_diagram"
             option_ids = {o["id"] for o in payload_1["options"]}
             assert option_ids == {str(req_a.id), str(req_b.id)}
             print(f"RUN 1: user_confirm_inputs bubbled to the TOP caller. pattern={payload_1['pattern']!r} "
                   f"options={payload_1['options']}")
 
             result_2 = await top_graph.ainvoke(
-                Command(resume={"action": "confirm", "selected_id": str(req_b.id)}), config
+                Command(resume={"action": "confirm", "selected_ids": [str(req_b.id)]}), config
             )
             assert result_2.get("__interrupt__"), "expected layer-3's requirement_review to now pause"
             payload_2 = result_2["__interrupt__"][0].value
@@ -314,11 +359,18 @@ async def test_encryption_at_rest():
     print("=" * 70)
     user, session = await setup_user_project_session()
 
-    draft = "The system shall have a unique plaintext marker XYZZY123 in it."
+    draft = VALID_REQUIREMENT.replace(
+        "The vehicle shall stop within 50 meters when braking.",
+        "The vehicle shall have a unique plaintext marker XYZZY123 in it.",
+    )
 
     top_llm = FakeStructuredWrapperLLM(TopDecision(active_agent=AgentTarget.sysml, intent_complete=False))
-    middle_llm = FakeStructuredWrapperLLM(MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement))
+    # level=operational so resolve_level admits it with no source requirement.
+    middle_llm = FakeStructuredWrapperLLM(
+        MiddleDecision(has_request=True, resolved_intent=Intent.generate_requirement, level=RequirementLevel.operational)
+    )
     layer3_supervisor_llm = FakeStructuredWrapperLLM(IntentDecision(intent=Intent.generate_requirement))
+    plan_llm = FakeSequenceLLM(["Requirement def with subject Vehicle and a marker constraint."])
     generate_llm = FakeSequenceLLM([draft])
 
     def fake_top_get_llm(node_name=None):
@@ -330,6 +382,8 @@ async def test_encryption_at_rest():
     def fake_layer3_get_llm(node_name=None):
         if node_name == "sysml_supervisor":
             return layer3_supervisor_llm
+        if node_name == "sysml_plan":
+            return plan_llm
         return generate_llm
 
     outer_thread_id = f"outer-{uuid.uuid4()}"
@@ -337,7 +391,8 @@ async def test_encryption_at_rest():
     async with build_production_checkpointer() as checkpointer:
         with patch("supervisor.router.get_llm", side_effect=fake_top_get_llm), \
              patch("agents.sysml.middle_nodes.get_llm", side_effect=fake_middle_get_llm), \
-             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm):
+             patch("agents.sysml.nodes.get_llm", side_effect=fake_layer3_get_llm), \
+             patch("agents.sysml.nodes.validate", return_value=[]):
 
             top_graph = build_supervisor_graph(checkpointer=checkpointer)
             config = build_supervisor_config(outer_thread_id)
