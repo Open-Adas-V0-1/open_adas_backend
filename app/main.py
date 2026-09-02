@@ -17,6 +17,7 @@ from sqlalchemy import text
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+from app.api.routes.artifacts import router as artifacts_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.chat import router as chat_router
 from app.api.routes.projects import router as projects_router
@@ -46,6 +47,7 @@ app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=li
 app.include_router(auth_router)
 app.include_router(projects_router)
 app.include_router(chat_router)
+app.include_router(artifacts_router)
 
 
 @app.get("/health")

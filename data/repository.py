@@ -20,6 +20,12 @@ from data.models import (
     VersionStatus,
 )
 
+# Mirrors agents/sysml/middle_nodes.py's OWN _SOURCE_LEVEL_FOR (the forward-only
+# Op->Func->Phys derivation chain) -- duplicated here rather than imported, since the
+# repository layer must not depend on the graph layer. Used ONLY by
+# RequirementRepo.find_likely_derivation_source's read-only heuristic (T6b Step 5).
+_SOURCE_LEVEL_FOR = {"functional": "operational", "physical": "functional"}
+
 
 class UserRepo:
     @staticmethod
@@ -309,6 +315,71 @@ class RequirementRepo:
         )
         return sorted({level.value for level in result.scalars().all()})
 
+    # ── T6b Step 5: read API support ──────────────────────────────────────────
+
+    @staticmethod
+    async def get_by_id_any_session(db: AsyncSession, id: uuid.UUID) -> Requirement | None:
+        """NOT scoped to a session -- used ONLY by the ownership-resolving dependency
+        (app/api/deps.py's get_owned_requirement), which must look the row up FIRST to
+        discover which session it belongs to, before it can even check ownership.
+        Every other call site keeps using the session-scoped get_by_id.
+        """
+        return await db.get(Requirement, id)
+
+    @staticmethod
+    async def list_by_session_filtered(
+        db: AsyncSession,
+        session_id: uuid.UUID,
+        active_only: bool = True,
+        level: RequirementLevel | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Requirement]:
+        stmt = select(Requirement).where(Requirement.session_id == session_id)
+        if active_only:
+            stmt = stmt.where(Requirement.status == VersionStatus.active)
+        if level is not None:
+            stmt = stmt.where(Requirement.level == level)
+        stmt = stmt.order_by(Requirement.created_at.desc()).limit(limit).offset(offset)
+        result = await db.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def list_versions_by_root(db: AsyncSession, root_id: uuid.UUID, session_id: uuid.UUID) -> list[Requirement]:
+        """The FULL lineage sharing this root_id, oldest version first -- how the UI
+        shows a requirement's history. Includes rejected/pending rows too (a complete
+        history, not just active/superseded) -- callers that only want the two real
+        version states can filter status != rejected/pending themselves if needed.
+        """
+        result = await db.execute(
+            select(Requirement)
+            .where(Requirement.session_id == session_id, Requirement.root_id == root_id)
+            .order_by(Requirement.version.asc())
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def find_likely_derivation_source(db: AsyncSession, requirement: Requirement) -> Requirement | None:
+        """BEST-EFFORT, read-only heuristic for 'which requirement was this one derived
+        FROM' (forward-only level derivation -- operational -> functional -> physical),
+        DISTINCT from parent_id (which tracks VERSION lineage, v1 -> v2 of the SAME
+        requirement, a real stored FK). No column or metadata field in this schema
+        captures the level-derivation link today (resolve_level's own resolved_source_id
+        is ephemeral MiddleState, never persisted onto the finalized row) -- adding one
+        would require a graph/node change, out of scope for this read-only step. This
+        mirrors resolve_level's OWN deterministic rule instead: the single active
+        requirement one level down, in the same session, if unambiguous. Returns None
+        for operational (top of chain, no source) or when the candidate set isn't
+        exactly one (ambiguous or missing) -- fails safe, never guesses.
+        """
+        source_level = _SOURCE_LEVEL_FOR.get(requirement.level.value)
+        if source_level is None:
+            return None
+        candidates = await RequirementRepo.list_by_session_and_level(
+            db, session_id=requirement.session_id, level=RequirementLevel(source_level)
+        )
+        return candidates[0] if len(candidates) == 1 else None
+
 
 class DiagramRepo:
     @staticmethod
@@ -431,6 +502,37 @@ class DiagramRepo:
         db.add(new)
         await db.flush()
         return new
+
+    # ── T6b Step 5: read API support ──────────────────────────────────────────
+
+    @staticmethod
+    async def get_by_id_any_session(db: AsyncSession, id: uuid.UUID) -> Diagram | None:
+        """NOT scoped to a session -- used ONLY by the ownership-resolving dependency
+        (app/api/deps.py's get_owned_diagram); see RequirementRepo's twin method.
+        """
+        return await db.get(Diagram, id)
+
+    @staticmethod
+    async def list_active_for_session(db: AsyncSession, session_id: uuid.UUID) -> list[Diagram]:
+        result = await db.execute(
+            select(Diagram).where(Diagram.session_id == session_id, Diagram.status == VersionStatus.active)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def list_by_session_filtered(
+        db: AsyncSession,
+        session_id: uuid.UUID,
+        active_only: bool = True,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Diagram]:
+        stmt = select(Diagram).where(Diagram.session_id == session_id)
+        if active_only:
+            stmt = stmt.where(Diagram.status == VersionStatus.active)
+        stmt = stmt.order_by(Diagram.created_at.desc()).limit(limit).offset(offset)
+        result = await db.execute(stmt)
+        return list(result.scalars().all())
 
 
 class PublishedRequirementRepo:
