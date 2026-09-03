@@ -447,6 +447,7 @@ async def build_structured_format(state: MiddleState) -> dict:
         diagram_type=DiagramType(state["diagram_type"]) if state.get("diagram_type") else None,
         user_input=state.get("user_input", ""),
         session_id=state["session_id"],
+        gen_id=state.get("gen_id"),
     )
 
     return {"processing_input": processing_input.model_dump(mode="json")}
@@ -621,12 +622,19 @@ def route_from_user_confirm(state: MiddleState) -> str:
 async def sysml_processing(state: MiddleState, config: RunnableConfig) -> dict:
     """The 'inside a node' wrapper (spike-validated pattern) for the middle -> layer-3
     boundary. Derives a DETERMINISTIC per-processing thread_id from state that was
-    already fixed BEFORE this node started (session_id + processing_counter) — not a
-    random uuid, since this node re-runs from the top if layer-3 pauses and resumes.
+    already fixed BEFORE this node started — not a random uuid, since this node re-runs
+    from the top if layer-3 pauses and resumes.
+
+    Prefers the task's permanent gen_id (set by Layer-1's sysml_middle_node) when
+    present, so the thread id is stable across resumes and never collides across
+    different tasks. Falls back to the old session_id + processing_counter shape ONLY
+    when gen_id is absent — the standalone Layer-2 contract (driven directly, without
+    Layer-1), which this must keep working unchanged.
     """
     proc_counter = state.get("processing_counter") or 1
     session_id = state["session_id"]
-    proc_thread_id = f"{session_id}:proc:{proc_counter}"
+    gen_id = state.get("gen_id")
+    proc_thread_id = f"{session_id}:gen:{gen_id}" if gen_id else f"{session_id}:proc:{proc_counter}"
 
     async with async_session_factory() as db:
         # last_accessed touch for this proc thread — a fresh proc thread and a resumed
@@ -661,6 +669,7 @@ async def sysml_processing(state: MiddleState, config: RunnableConfig) -> dict:
         "target_requirement_id": target_requirement_id,
         "level": processing_input.level.value,
         "diagram_type": processing_input.diagram_type.value if processing_input.diagram_type else None,
+        "gen_id": processing_input.gen_id,
     }
 
     if len(target_ids) > 1:
@@ -696,6 +705,7 @@ async def sysml_processing(state: MiddleState, config: RunnableConfig) -> dict:
         "artifact_type": artifact_type,
         "artifact_id": artifact_id,
         "summary": l3_output.get("result"),
+        "gen_id": gen_id,
     }
 
     return {

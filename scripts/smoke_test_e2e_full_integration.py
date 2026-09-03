@@ -576,8 +576,8 @@ async def scenario_6_checkpointer_integrity():
         thread_rows = (await db.execute(text("SELECT DISTINCT thread_id FROM checkpoints"))).fetchall()
     thread_ids = sorted(r[0] for r in thread_rows)
     outer_ids = [t for t in thread_ids if t.startswith("outer-")]
-    middle_ids = [t for t in thread_ids if ":middle:" in t]
-    proc_ids = [t for t in thread_ids if ":proc:" in t]
+    middle_ids = [t for t in thread_ids if ":mid:" in t]
+    proc_ids = [t for t in thread_ids if ":gen:" in t]
     print(f"  distinct thread_ids in Postgres checkpoints: {len(thread_ids)} total")
     print(f"    outer (Layer-1) threads: {len(outer_ids)}")
     print(f"    middle (Layer-1 -> Layer-2) threads: {len(middle_ids)}")

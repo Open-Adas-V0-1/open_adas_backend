@@ -3,6 +3,7 @@ plan_node (Step 2). No LLM calls here; pure reads/transforms of state already in
 Shared by top_level_supervisor (task selection), sysml_middle_node (task execution),
 plan_node (initial build), and plan_review (the light re-validation path for edits).
 """
+import uuid
 
 from app.schemas.supervisor import PlannedTask, TodoItem, TodoStatus
 
@@ -33,6 +34,7 @@ def build_todo_items(planned_tasks: list[PlannedTask]) -> list[TodoItem]:
             depends_on=f"task-{t.depends_on_task_number}" if t.depends_on_task_number else None,
             status=TodoStatus.pending,
             result_ref=None,
+            gen_id=str(uuid.uuid4()),
         )
         for i, t in enumerate(planned_tasks, start=1)
     ]

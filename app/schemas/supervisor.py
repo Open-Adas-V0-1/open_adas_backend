@@ -83,6 +83,12 @@ class TodoItem(BaseModel):
     # LIGHT reference only, filled in by Step 3's execution loop after this task runs
     # -- never full artifact content.
     result_ref: dict | None = None
+    # Permanent, session-unique handle for this task's Layer-3 processing thread --
+    # minted once in build_todo_items (never regenerated on resume, since plan_state is
+    # re-read from the checkpointer rather than rebuilt) and threaded down through
+    # Layer-2's middle thread to name Layer-3's thread deterministically, avoiding the
+    # per-plan-counter collision task['id'] would otherwise cause across turns.
+    gen_id: str
 
 
 class PlanState(BaseModel):

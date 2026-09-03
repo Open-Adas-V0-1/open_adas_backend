@@ -166,6 +166,7 @@ class RequirementRepo:
         level: RequirementLevel = RequirementLevel.functional,
         source_published_requirement_id: uuid.UUID | None = None,
         metadata: dict | None = None,
+        gen_id: str | None = None,
     ) -> Requirement:
         new_id = uuid.uuid4()
         requirement = Requirement(
@@ -178,6 +179,7 @@ class RequirementRepo:
             root_id=new_id,  # a fresh requirement is the root of its own lineage
             source_published_requirement_id=source_published_requirement_id,
             metadata_=metadata,
+            gen_id=gen_id,
         )
         db.add(requirement)
         await db.flush()
@@ -262,6 +264,7 @@ class RequirementRepo:
         level: RequirementLevel,
         metadata: dict | None = None,
         source_published_requirement_id: uuid.UUID | None = None,
+        gen_id: str | None = None,
     ) -> Requirement:
         """Persist an APPROVED requirement keyed by (session_id == thread_id, level).
         Deliberately NOT the promote()/active-supersedes-active dance: levels accumulate
@@ -279,6 +282,7 @@ class RequirementRepo:
             root_id=new_id,
             source_published_requirement_id=source_published_requirement_id,
             metadata_=metadata,
+            gen_id=gen_id,
         )
         db.add(requirement)
         await db.flush()
@@ -392,6 +396,7 @@ class DiagramRepo:
         mermaid: str | None = None,
         rendered_path: str | None = None,
         metadata: dict | None = None,
+        gen_id: str | None = None,
     ) -> Diagram:
         new_id = uuid.uuid4()
         diagram = Diagram(
@@ -406,6 +411,7 @@ class DiagramRepo:
             version=1,
             root_id=new_id,  # a fresh diagram is the root of its own lineage
             metadata_=metadata,
+            gen_id=gen_id,
         )
         db.add(diagram)
         await db.flush()
@@ -420,6 +426,7 @@ class DiagramRepo:
         sysml_text: str,
         mermaid: str | None,
         metadata: dict | None = None,
+        gen_id: str | None = None,
     ) -> Diagram:
         """Persist an APPROVED diagram keyed by (session_id == thread_id, level via its
         linked requirement). Same no-supersede contract as RequirementRepo.finalize.
@@ -436,6 +443,7 @@ class DiagramRepo:
             version=1,
             root_id=new_id,
             metadata_=metadata,
+            gen_id=gen_id,
         )
         db.add(diagram)
         await db.flush()

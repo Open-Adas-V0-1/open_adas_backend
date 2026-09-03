@@ -400,6 +400,7 @@ async def finalize(state: SysmlState) -> dict:
                 sysml_text=state["draft_sysml"],
                 mermaid=state.get("draft_mermaid"),
                 metadata=metadata,
+                gen_id=state.get("gen_id"),
             )
             await db.commit()
             # active_diagram_id is a compatibility alias: the middle layer's wrapper
@@ -418,6 +419,7 @@ async def finalize(state: SysmlState) -> dict:
             content=state["draft_sysml"],
             level=level,
             metadata=metadata,
+            gen_id=state.get("gen_id"),
         )
         await db.commit()
         return {

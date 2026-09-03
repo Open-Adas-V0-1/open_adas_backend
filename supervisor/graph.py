@@ -23,28 +23,23 @@ async def sysml_middle_node(state: SupervisorState, config: RunnableConfig) -> d
     task top_level_supervisor just marked in_progress.
 
     Deterministic per-processing thread id, derived from state fixed BEFORE this node
-    ran (session_id + the task's own id, not a random uuid) -- this node re-runs from
-    the top if Layer-2 (or Layer-3 beneath it) pauses and resumes, and must reconstruct
-    the SAME child thread id every time for the checkpointer to resume correctly. Each
-    task in a plan gets its OWN middle_thread_id -- distinct rows in Postgres, verified
-    per task.
+    ran -- this node re-runs from the top if Layer-2 (or Layer-3 beneath it) pauses and
+    resumes, and must reconstruct the SAME child thread id every time for the
+    checkpointer to resume correctly. Keyed off the task's gen_id (a permanent handle
+    minted once in build_todo_items, stable across resumes) rather than task['id'] (a
+    per-plan counter that collides across turns/plans) -- each task in a plan gets its
+    OWN middle_thread_id, distinct rows in Postgres, verified per task.
 
-    Known characteristic (not a bug to fix here): Layer-2's OWN sysml_processing derives
-    ITS child (layer-3) thread id as f"{session_id}:proc:{processing_counter}" --
-    session_id-scoped, not middle_thread_id-scoped, and processing_counter resets to 1
-    on every FRESH middle-graph invocation. Since each task here gets a fresh
-    middle_thread_id (by design, above), two DIFFERENT tasks' layer-3 sub-threads can
-    end up with the SAME computed string. This is harmless in practice under Layer-1's
-    strictly-sequential execution (verified: each task's artifact still finalizes
-    correctly, with distinct content, since a fresh dict invoke always starts a new run
-    from START regardless of prior history under that thread id) -- but changing Layer-2's
-    formula to avoid it would break its own regression suite (smoke_test_t5a.py hardcodes
-    the current f"{session.id}:proc:1" shape), which is explicitly out of scope here.
+    gen_id is also passed down into middle_input below so Layer-2's own sysml_processing
+    can derive ITS child (layer-3) thread id from the SAME permanent handle
+    (f"{session_id}:gen:{gen_id}"), instead of its session_id-scoped processing_counter
+    (which used to reset to 1 on every fresh middle-graph invocation and could collide
+    across different tasks -- see agents/sysml/middle_nodes.py's sysml_processing).
     """
     plan_state = state["plan_state"]
     task = in_progress_task(plan_state)
     session_id = state["session_id"]
-    middle_thread_id = f"{session_id}:middle:{task['id']}"
+    middle_thread_id = f"{session_id}:mid:{task['gen_id']}"
 
     child_config = {
         **config,
@@ -78,6 +73,7 @@ async def sysml_middle_node(state: SupervisorState, config: RunnableConfig) -> d
         "user_input": middle_user_input,
         "session_id": session_id,
         "target_requirement_id": target_requirement_id,
+        "gen_id": task["gen_id"],
         # This ONE task is the entire ask for this middle graph invocation -- enables
         # Layer-2's completion condition (agents/sysml/middle_nodes.py's task_locked/
         # task_target), which stops middle_supervisor from re-judging an

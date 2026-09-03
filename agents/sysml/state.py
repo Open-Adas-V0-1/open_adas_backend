@@ -47,6 +47,10 @@ class SysmlState(TypedDict, total=False):
     # ownership / checkpoint context
     session_id: uuid.UUID
     thread_id: str
+    # Permanent per-generation handle (ProcessingInput.gen_id), passed straight through
+    # from the middle layer -- recorded on the artifact row at finalize() so a later
+    # step can look a generation up by its handle. None on the standalone path.
+    gen_id: str | None
 
     # result
     persisted_requirement_id: str | None

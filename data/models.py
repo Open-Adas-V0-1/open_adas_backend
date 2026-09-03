@@ -124,6 +124,10 @@ class Requirement(Base):
     # layer-3's stockage_output on approval: artifact_type, level, source_node,
     # source_published_id, regeneration_count, final_feedback, summary, approved_at.
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB, default=None)
+    # Permanent per-generation handle (TodoItem.gen_id) naming the Layer-3 thread that
+    # produced this row, if any -- nullable, since rows finalized before this column
+    # existed have none. Lets a later step find a generation by its handle.
+    gen_id: Mapped[str | None] = mapped_column(index=True, default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     session: Mapped["Session"] = relationship(back_populates="requirements")
@@ -158,6 +162,8 @@ class Diagram(Base):
     )
     # Same "approved-only summary" contract as Requirement.metadata_.
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB, default=None)
+    # Same gen_id contract as Requirement.gen_id.
+    gen_id: Mapped[str | None] = mapped_column(index=True, default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     session: Mapped["Session"] = relationship(back_populates="diagrams")

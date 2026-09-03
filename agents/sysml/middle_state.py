@@ -28,6 +28,11 @@ class MiddleState(TypedDict, total=False):
     # the middle graph is driven directly/standalone (its own established contract: a
     # single free-form message may legitimately describe several distinct asks).
     single_task_dispatch: bool | None
+    # Set alongside single_task_dispatch by Layer-1's sysml_middle_node -- the
+    # delegated task's permanent gen_id, used to derive Layer-3's thread id
+    # deterministically (see sysml_processing). None on the standalone Layer-2 path,
+    # where sysml_processing falls back to its own processing_counter-based id.
+    gen_id: str | None
 
     # the requirement this processing concerns, if any. Resolved either directly by
     # middle_supervisor (named or sole active requirement) or via user_confirm_inputs

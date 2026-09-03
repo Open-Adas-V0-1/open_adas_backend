@@ -29,6 +29,9 @@ class ProcessingInput(BaseModel):
     diagram_type: DiagramType | None = None
     user_input: str
     session_id: uuid.UUID
+    # Permanent handle (task['gen_id']) for the generation this processing belongs to,
+    # threaded from Layer-1 through Layer-2 -- None on the standalone Layer-2 path.
+    gen_id: str | None = None
 
     # Extension point: once file-backed requests exist, a reference to the
     # file-extracted requirements (e.g. `extracted_requirements_ref: str | None`)
