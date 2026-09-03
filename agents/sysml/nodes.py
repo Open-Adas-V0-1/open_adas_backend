@@ -7,6 +7,7 @@ from langgraph.types import interrupt
 from agents.sysml.state import SysmlState
 from agents.sysml.tools import to_mermaid, validate
 from app.config import get_settings
+from app.logging import get_logger
 from app.schemas.sysml import Intent, IntentDecision
 from data.db import async_session_factory
 from data.models import DiagramType, RequirementLevel
@@ -14,6 +15,9 @@ from data.repository import DiagramRepo, RequirementRepo
 from llm.factory import get_llm
 from llm.prompts import load_prompt
 from skills.loader import get_error_help, get_patterns, get_syntax, match
+from tools.sysml_v2.paths import resolve_lsp_server_path
+
+logger = get_logger(__name__)
 
 _GENERATE_TARGETING_INTENTS = {
     Intent.generate_requirement.value,
@@ -224,11 +228,44 @@ async def generate_node(state: SysmlState) -> dict:
 async def verify_node(state: SysmlState) -> dict:
     """Automatic verification: LSP diagnostics, coverage analysis, and (for diagrams)
     Mermaid derivation. Iterates the caller toward CLEAN — see route_from_verify.
+
+    A tool FAILURE (the LSP subprocess can't start, its server path doesn't resolve,
+    it times out, or the transport breaks) is a distinct third outcome from "clean" and
+    "has diagnostics" -- verification_status="unavailable". It is never allowed to
+    collapse into verify_clean=True: an artifact that was never actually checked is
+    not a clean bill of health, no matter how it looks superficially. No retry here —
+    a broken tool call isn't fixed by calling it again with the same env.
     """
     text = state.get("draft_sysml") or ""
     source_node = state.get("source_node")
 
-    diagnostics = await validate(text)
+    try:
+        diagnostics = await validate(text)
+    except Exception as exc:
+        # Best-effort only, for the log line -- resolving the path can itself fail
+        # (e.g. FileNotFoundError, which is likely the very exception we just caught).
+        try:
+            server_path = str(resolve_lsp_server_path())
+        except Exception as path_exc:
+            server_path = f"<unresolved: {path_exc}>"
+        logger.error(
+            "sysml.verify_tool_unavailable",
+            error_type=type(exc).__name__,
+            error=str(exc),
+            server_path=server_path,
+        )
+        return {
+            "verify_diagnostics": [],
+            "verify_coverage_gaps": _coverage_gaps(text, source_node, state.get("diagram_type")),
+            "verify_clean": False,
+            "verification_status": "unavailable",
+            "verify_warning": (
+                f"Automatic SysML v2 validation was UNAVAILABLE ({type(exc).__name__}: {exc}) — "
+                "this draft has NOT been syntax/semantic checked by the tool. Review the text "
+                "yourself before approving."
+            ),
+        }
+
     diagnostic_dicts = [d.to_dict() for d in diagnostics]
 
     coverage_gaps = _coverage_gaps(text, source_node, state.get("diagram_type"))
@@ -248,6 +285,7 @@ async def verify_node(state: SysmlState) -> dict:
         "verify_diagnostics": diagnostic_dicts,
         "verify_coverage_gaps": coverage_gaps,
         "verify_clean": clean,
+        "verification_status": "clean" if clean else "diagnostics",
     }
     if mermaid is not None:
         result["draft_mermaid"] = mermaid
@@ -266,6 +304,13 @@ async def verify_node(state: SysmlState) -> dict:
 
 
 def route_from_verify(state: SysmlState) -> str:
+    if state.get("verification_status") == "unavailable":
+        # Same fail-open destination as the max-visits case, but reached
+        # unconditionally: looping back to generate_node would just call the SAME
+        # broken tool again next visit, wasting cycles on an environment problem the
+        # regeneration loop cannot fix. verify_warning already carries the "NOT
+        # validated" disclosure for the human reviewer.
+        return "requirement_review"
     if state.get("verify_clean"):
         return "requirement_review"
     visits = state.get("verify_visits") or 0
@@ -286,6 +331,7 @@ def requirement_review(state: SysmlState) -> dict:
             "level": state.get("level", "functional"),
             "diagram_type": state.get("diagram_type"),
             "verify_clean": state.get("verify_clean"),
+            "verification_status": state.get("verification_status"),
             "verify_diagnostics": state.get("verify_diagnostics"),
             "verify_warning": state.get("verify_warning"),
             "contextual_answer_text": state.get("contextual_answer_text"),
@@ -339,7 +385,7 @@ async def finalize(state: SysmlState) -> dict:
         "level": level.value,
         "verify_clean_at_approval": state.get("verify_clean"),
         "verify_diagnostics_at_approval": state.get("verify_diagnostics") or [],
-        "regeneration_rounds": state.get("verify_visits") or 0,
+        "generation_attempts": state.get("verify_visits") or 0,
         "final_feedback": state.get("feedback"),
         "approved_at": approved_at,
     }

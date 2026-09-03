@@ -181,7 +181,7 @@ async def test_happy_path():
             assert requirement.session_id == session.id
             assert requirement.level.value == "functional"
             assert requirement.metadata_["verify_clean_at_approval"] is True
-            assert requirement.metadata_["regeneration_rounds"] == 1
+            assert requirement.metadata_["generation_attempts"] == 1
             print(f"assert OK: finalized, keyed by session(=thread) {session.id} + level=functional. "
                   f"metadata={requirement.metadata_}")
 
@@ -238,8 +238,8 @@ async def test_verify_loop_recovers():
         async with async_session_factory() as db:
             rows = await RequirementRepo.list_by_session(db, session_id=session.id)
             assert len(rows) == 1
-            assert rows[0].metadata_["regeneration_rounds"] == 2
-            print(f"assert OK: finalized. regeneration_rounds={rows[0].metadata_['regeneration_rounds']}")
+            assert rows[0].metadata_["generation_attempts"] == 2
+            print(f"assert OK: finalized. generation_attempts={rows[0].metadata_['generation_attempts']}")
 
     await cleanup_user(user)
     print("Scenario 2 PASSED")

@@ -117,7 +117,20 @@ async def create_turn(
 
     turn_id = str(uuid.uuid4())
     logger.info("chat.turn_started", session_id=str(session_id), turn_id=turn_id)
-    graph_input = {"user_input": payload.message, "session_id": session_id}
+    # Explicitly reset per-turn fields: SupervisorState has no reducers (last-value-wins),
+    # so without these the previous turn's persisted plan_state/done/result survive into
+    # this turn and top_level_supervisor short-circuits as if the new message never came in.
+    graph_input = {
+        "user_input": payload.message,
+        "session_id": session_id,
+        "plan_state": None,
+        "classification": None,
+        "plan_review_decision": None,
+        "supervisor_visits": 0,
+        "done": False,
+        "result": None,
+        "results": None,
+    }
     return _launch_run(graph, config, session_id, turn_id, graph_input, trace)
 
 

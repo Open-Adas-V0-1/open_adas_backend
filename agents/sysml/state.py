@@ -36,8 +36,13 @@ class SysmlState(TypedDict, total=False):
     verify_diagnostics: list[dict] | None  # [{message, line, column, severity}, ...]
     verify_coverage_gaps: list[str] | None
     verify_clean: bool
+    # Distinct from verify_clean: whether the LSP tool call itself could even run.
+    # "clean" | "diagnostics" | "unavailable" -- "unavailable" (tool failure: process
+    # couldn't start, server path unresolved, timeout, transport error) must NEVER be
+    # collapsed into verify_clean=True. See verify_node/route_from_verify.
+    verification_status: str | None
     verify_visits: int  # generate/verify round counter within the current plan cycle
-    verify_warning: str | None  # set only on fail-open (limit reached, still not clean)
+    verify_warning: str | None  # set on fail-open (limit reached, OR tool unavailable)
 
     # ownership / checkpoint context
     session_id: uuid.UUID

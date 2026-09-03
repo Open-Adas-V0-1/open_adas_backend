@@ -22,8 +22,13 @@ dependencies = [
     "langchain-google-genai>=2.0.0",
     "langchain-openai>=1.0.2",
     "langfuse==3.9.1",
-    "langgraph>=1.0.2",
-    "langgraph-checkpoint-postgres>=3.0.1",
+    # Pinned: checkpointer interrupt bubbling, checkpoint namespaces, and msgpack
+    # serialization verified against these exact builds; an open lower bound
+    # (>=1.0.2) previously resolved to 1.2.11 while the declared floor did not
+    # match the tested reality.
+    "langgraph==1.2.11",
+    "langgraph-checkpoint==4.2.0",
+    "langgraph-checkpoint-postgres==3.1.2",
     "pycryptodome>=3.23.0",
     "mem0ai>=1.0.0",
     "passlib[bcrypt]>=1.7.4",
