@@ -182,7 +182,11 @@ async def run_turn(
     except Exception as exc:
         # Generic message only -- never a stack trace or provider detail to the
         # client. error_type (just the class name) is safe/useful server-side.
-        logger.error("chat.turn_failed", session_id=str(session_id), turn_id=turn_id, error_type=type(exc).__name__)
+        # TEMPORARY DIAGNOSTIC: error_message added to find out which RuntimeError
+        # this is -- revert to the plain call below once diagnosed. (Not exc_info=
+        # -- app/logging.py has no format_exc_info/dict_tracebacks processor, so a
+        # raw traceback object would crash JSONRenderer's json.dumps.)
+        logger.error("chat.turn_failed", session_id=str(session_id), turn_id=turn_id, error_type=type(exc).__name__, error_message=str(exc))
         if trace.enabled:
             await trace.emit(layer=None, node=None, ns=None, phase="error", data={"error_type": type(exc).__name__})
         await queue.put(_sse("error", {"message": "An internal error occurred while processing your message."}))

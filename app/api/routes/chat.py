@@ -115,22 +115,29 @@ async def create_turn(
             detail={"status": "running", "message": "A turn is already running for this session."},
         )
 
-    turn_id = str(uuid.uuid4())
-    logger.info("chat.turn_started", session_id=str(session_id), turn_id=turn_id)
-    # Explicitly reset per-turn fields: SupervisorState has no reducers (last-value-wins),
-    # so without these the previous turn's persisted plan_state/done/result survive into
-    # this turn and top_level_supervisor short-circuits as if the new message never came in.
-    graph_input = {
-        "user_input": payload.message,
-        "session_id": session_id,
+    # SupervisorState has no reducers (plain TypedDict, total=False -- see
+    # supervisor/state.py), but that alone doesn't clear stale state: values passed in
+    # astream_events' input dict do NOT overwrite already-persisted channel values on a
+    # resumed thread_id -- LangGraph only applies that input to the nodes it runs, and a
+    # fresh turn's first node (top_level_supervisor) reads the PERSISTED plan_state/done
+    # before the new input is considered, so the previous turn's completed state survives
+    # and short-circuits classification. The fix is an explicit aupdate_state() write
+    # BEFORE the run, which does land as the thread's latest checkpoint.
+    # /turn ONLY -- /resume must never do this: it would wipe an in-flight multi-task
+    # plan_state out from under an interrupted turn and break resume/interrupt bubbling.
+    await graph.aupdate_state(config, {
         "plan_state": None,
-        "classification": None,
-        "plan_review_decision": None,
-        "supervisor_visits": 0,
         "done": False,
         "result": None,
+        "classification": None,
+        "supervisor_visits": 0,
+        "plan_review_decision": None,
         "results": None,
-    }
+    })
+
+    turn_id = str(uuid.uuid4())
+    logger.info("chat.turn_started", session_id=str(session_id), turn_id=turn_id)
+    graph_input = {"user_input": payload.message, "session_id": session_id}
     return _launch_run(graph, config, session_id, turn_id, graph_input, trace)
 
 
