@@ -194,7 +194,7 @@ async def main() -> None:
             # --- Assertion 1: light reference only, no full artifact content in MiddleState ---
             light_ref = result_2.get("processing_result")
             assert light_ref is not None
-            assert set(light_ref.keys()) == {"processing_id", "thread_id", "artifact_type", "artifact_id", "summary"}
+            assert set(light_ref.keys()) == {"processing_id", "thread_id", "artifact_type", "artifact_id", "summary", "gen_id"}
             assert "content" not in light_ref and "draft" not in light_ref
             assert draft not in str(light_ref), "full artifact text must NOT be present in the light reference"
             print("assert OK: MiddleState's processing_result carries only ids + summary, not the full text")
