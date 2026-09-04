@@ -363,6 +363,19 @@ class RequirementRepo:
         return list(result.scalars().all())
 
     @staticmethod
+    async def list_revisitable_for_session(db: AsyncSession, session_id: uuid.UUID) -> list[Requirement]:
+        """Approved requirements this session can revisit (Step 2c) -- gen_id not null,
+        newest first. Older rows finalized before the gen_id column existed have none
+        and are silently excluded, never a crash: they're simply not revisitable by handle.
+        """
+        result = await db.execute(
+            select(Requirement)
+            .where(Requirement.session_id == session_id, Requirement.gen_id.isnot(None))
+            .order_by(Requirement.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
     async def find_likely_derivation_source(db: AsyncSession, requirement: Requirement) -> Requirement | None:
         """BEST-EFFORT, read-only heuristic for 'which requirement was this one derived
         FROM' (forward-only level derivation -- operational -> functional -> physical),
@@ -448,6 +461,25 @@ class DiagramRepo:
         db.add(diagram)
         await db.flush()
         return diagram
+
+    @staticmethod
+    async def list_revisitable_for_session(db: AsyncSession, session_id: uuid.UUID) -> list[Diagram]:
+        """Same contract as RequirementRepo.list_revisitable_for_session, for diagrams.
+        Each returned Diagram carries its linked requirement's level as a TRANSIENT
+        `level` attribute (not a mapped column, never persisted) -- resolve_revisit's
+        level-keyword matching treats requirements and diagrams uniformly this way.
+        """
+        result = await db.execute(
+            select(Diagram, Requirement.level)
+            .join(Requirement, Diagram.requirement_id == Requirement.id)
+            .where(Diagram.session_id == session_id, Diagram.gen_id.isnot(None))
+            .order_by(Diagram.created_at.desc())
+        )
+        diagrams = []
+        for diagram, level in result.all():
+            diagram.level = level
+            diagrams.append(diagram)
+        return diagrams
 
     @staticmethod
     async def get_by_requirement(

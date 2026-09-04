@@ -9,6 +9,7 @@ from supervisor.memory import memory_optimization
 from supervisor.plan import plan_node
 from supervisor.plan_ops import in_progress_task, with_task_status
 from supervisor.plan_review import plan_review, route_from_plan_node, route_from_plan_review
+from supervisor.revisit import resolve_revisit
 from supervisor.router import route_from_top_supervisor, top_level_supervisor
 from supervisor.state import SupervisorState
 
@@ -31,10 +32,13 @@ async def sysml_middle_node(state: SupervisorState, config: RunnableConfig) -> d
     OWN middle_thread_id, distinct rows in Postgres, verified per task.
 
     gen_id is also passed down into middle_input below so Layer-2's own sysml_processing
-    can derive ITS child (layer-3) thread id from the SAME permanent handle
-    (f"{session_id}:gen:{gen_id}"), instead of its session_id-scoped processing_counter
-    (which used to reset to 1 on every fresh middle-graph invocation and could collide
-    across different tasks -- see agents/sysml/middle_nodes.py's sysml_processing).
+    can derive ITS child (layer-3) thread id from the SAME permanent handle, combined
+    with its own processing_counter (f"{session_id}:gen:{gen_id}:{processing_counter}")
+    -- gen_id alone isn't enough, since one task can still trigger several processings
+    in sequence (e.g. a missing-prerequisite step); gen_id makes the id unique ACROSS
+    tasks (processing_counter used to reset to 1 on every fresh middle-graph invocation
+    and could collide there), while processing_counter still keeps it unique WITHIN a
+    task's own processings -- see agents/sysml/middle_nodes.py's sysml_processing.
     """
     plan_state = state["plan_state"]
     task = in_progress_task(plan_state)
@@ -123,6 +127,13 @@ def build_supervisor_graph(checkpointer=None):
     short-term context is near its configured budget (memory_ops.is_context_near_full);
     most turns skip it, straight to finalize_turn. Summarization itself is DEFERRED
     (memory_optimization is a pass-through node for now); only the routing is real.
+    Step 2c, piece 1 (this build): a THIRD hub classification, revisit_generation
+    (modifying an artifact that already exists, vs. needs_execution's fresh/next-level
+    work), routes to resolve_revisit -- the only DB-touching node on this path -- which
+    deterministically matches the message to one existing generation's gen_id. No
+    re-generation yet: resolve_revisit currently routes straight to finalize_turn
+    either way (resolved or asking the user to clarify); a later piece inserts the real
+    re-generation path between them.
     """
     builder = StateGraph(SupervisorState)
 
@@ -130,6 +141,7 @@ def build_supervisor_graph(checkpointer=None):
     builder.add_node("plan_node", plan_node)
     builder.add_node("plan_review", plan_review)
     builder.add_node("sysml_middle_node", sysml_middle_node)
+    builder.add_node("resolve_revisit", resolve_revisit)
     builder.add_node("memory_optimization", memory_optimization)
     builder.add_node("finalize_turn", finalize_turn)
 
@@ -141,6 +153,7 @@ def build_supervisor_graph(checkpointer=None):
         {
             "plan_node": "plan_node",
             "sysml_middle_node": "sysml_middle_node",
+            "resolve_revisit": "resolve_revisit",
             "memory_optimization": "memory_optimization",
             "finalize_turn": "finalize_turn",
             END: END,
@@ -166,6 +179,11 @@ def build_supervisor_graph(checkpointer=None):
     )
 
     builder.add_edge("sysml_middle_node", "top_level_supervisor")
+
+    # Piece 3 (later) inserts the real re-generation path between resolve_revisit and
+    # finalize_turn; for now a successful resolve just ends the turn so the matched
+    # gen_id is observable.
+    builder.add_edge("resolve_revisit", "finalize_turn")
 
     builder.add_edge("memory_optimization", "finalize_turn")
     builder.add_edge("finalize_turn", END)

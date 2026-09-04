@@ -11,8 +11,15 @@ class SupervisorState(TypedDict, total=False):
     # made every turn by top_level_supervisor. "response" is the direct answer for
     # simple_response, or the clarifying question for unclear. Left None while
     # needs_execution is being planned/executed (Steps 2-3).
-    classification: str | None  # "simple_response" | "needs_execution" | "unclear"
+    classification: str | None  # "simple_response" | "needs_execution" | "revisit_generation" | "unclear"
     response: str | None
+
+    # revisit_generation target resolution (Step 2c, piece 1): resolve_revisit's
+    # deterministic match of the user's message to ONE existing generation, by its
+    # permanent gen_id handle. None until a revisit is classified and resolved; None
+    # again once a fresh turn starts. Not yet acted on (piece 3 wires re-generation in).
+    revisit_gen_id: str | None
+    revisit_target_summary: str | None
 
     # the TODO-list plan (Step 2): a PlanState.model_dump() -- {tasks: [...], "
     # original_request": str}, built by plan_node ONLY for needs_execution. None until

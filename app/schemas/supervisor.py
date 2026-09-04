@@ -36,6 +36,7 @@ class HubClassification(str, Enum):
 
     simple_response = "simple_response"
     needs_execution = "needs_execution"
+    revisit_generation = "revisit_generation"
     unclear = "unclear"
 
 

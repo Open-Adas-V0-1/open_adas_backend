@@ -102,6 +102,15 @@ async def top_level_supervisor(state: SupervisorState) -> dict:
             "response": None,
         }
 
+    if classification == HubClassification.revisit_generation.value:
+        # Modify-an-existing-artifact: hand off to resolve_revisit (Step 2c, piece 1) to
+        # deterministically match the message to ONE existing generation's gen_id. No DB
+        # access here -- the hub stays clean, exactly as for needs_execution/plan_node.
+        return {
+            "supervisor_visits": visits,
+            "classification": classification,
+        }
+
     if classification == HubClassification.unclear.value:
         return {
             "supervisor_visits": visits,
@@ -128,6 +137,9 @@ def route_from_top_supervisor(state: SupervisorState) -> str:
     if state.get("classification") == HubClassification.needs_execution.value and not state.get("plan_state"):
         # needs_execution, no plan built yet this turn -> decompose it.
         return "plan_node"
+    if state.get("classification") == HubClassification.revisit_generation.value and not state.get("revisit_gen_id"):
+        # revisit_generation, target not resolved yet this turn -> resolve it.
+        return "resolve_revisit"
     plan_state = state.get("plan_state")
     if plan_state and in_progress_task(plan_state) is not None:
         # A task was just marked in_progress this visit -> delegate it to Layer-2.

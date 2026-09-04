@@ -626,15 +626,20 @@ async def sysml_processing(state: MiddleState, config: RunnableConfig) -> dict:
     from the top if layer-3 pauses and resumes.
 
     Prefers the task's permanent gen_id (set by Layer-1's sysml_middle_node) when
-    present, so the thread id is stable across resumes and never collides across
-    different tasks. Falls back to the old session_id + processing_counter shape ONLY
-    when gen_id is absent — the standalone Layer-2 contract (driven directly, without
-    Layer-1), which this must keep working unchanged.
+    present, combined with processing_counter, so the thread id is stable across
+    resumes and never collides across DIFFERENT tasks. gen_id ALONE is not enough: ONE
+    task can still trigger MULTIPLE processings in sequence (e.g. resolve_level's
+    missing-prerequisite step generates the operational source before the requested
+    functional target) -- each of those must land on its OWN Layer-3 thread, exactly as
+    processing_counter already guaranteed, or the second processing's checkpointed run
+    collides with the first's and never starts fresh. Falls back to the old session_id +
+    processing_counter shape entirely when gen_id is absent — the standalone Layer-2
+    contract (driven directly, without Layer-1), which this must keep working unchanged.
     """
     proc_counter = state.get("processing_counter") or 1
     session_id = state["session_id"]
     gen_id = state.get("gen_id")
-    proc_thread_id = f"{session_id}:gen:{gen_id}" if gen_id else f"{session_id}:proc:{proc_counter}"
+    proc_thread_id = f"{session_id}:gen:{gen_id}:{proc_counter}" if gen_id else f"{session_id}:proc:{proc_counter}"
 
     async with async_session_factory() as db:
         # last_accessed touch for this proc thread — a fresh proc thread and a resumed
